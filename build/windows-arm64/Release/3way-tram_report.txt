@@ -1,0 +1,56 @@
+osm2xodr conversion report
+=========================
+
+Input: 3way-tram.osm
+Output: 3way-tram.xodr
+OSM road ways parsed: 24
+OpenDRIVE roads written: 33 (10 junction connector roads)
+Junctions written: 2
+Compound junctions: 1 (merging 3 OSM junction nodes)
+Signals/signs written: 36
+Projection origin: lat=49.0071 lon=8.43136
+
+Road summary
+------------
+w134547011_0 source_way=134547011 length=151.00 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=2
+w705988291_0 source_way=705988291 length=174.09 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=3
+w134765858_1 source_way=134765858 length=3.92 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=2
+w134765858_2 source_way=134765858 length=13.23 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=1
+w158689400_0 source_way=158689400 length=2.89 forward=2 backward=0 left_lanes=0 right_lanes=3 signals=3
+w158689400_1 source_way=158689400 length=23.85 forward=2 backward=0 left_lanes=0 right_lanes=3 signals=1
+w171920834_0 source_way=171920834 length=24.86 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=2
+w171920834_1 source_way=171920834 length=111.08 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=2
+w171920834_2 source_way=171920834 length=8.00 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=2
+w171920834_3 source_way=171920834 length=10.15 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=1
+w243421488_0 source_way=243421488 length=14.26 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=2
+w250829584_0 source_way=250829584 length=58.34 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=1
+w250829586_0 source_way=250829586 length=13.22 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=1
+w250829600_0 source_way=250829600 length=55.62 forward=2 backward=0 left_lanes=0 right_lanes=3 signals=3
+w250829600_1 source_way=250829600 length=7.87 forward=2 backward=0 left_lanes=0 right_lanes=3 signals=2
+w250829600_2 source_way=250829600 length=11.79 forward=2 backward=0 left_lanes=0 right_lanes=3 signals=1
+w290898906_0 source_way=290898906 length=269.41 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=2
+w324270661_0 source_way=324270661 length=6.26 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=2
+w1131957776_0 source_way=1131957776 length=74.04 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=0
+w660022760_0 source_way=660022760 length=8.87 forward=1 backward=0 left_lanes=0 right_lanes=2 signals=1
+w871926613_1 source_way=871926613 length=7.26 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=1
+w963565286_0 source_way=963565286 length=35.87 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=1
+w1013898409_0 source_way=1013898409 length=144.08 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=0
+j_1828791750_c0 junction=j_1828791750 length=11.12 (connector)
+j_1828791750_c1 junction=j_1828791750 length=32.82 (connector)
+j_1828791750_c2 junction=j_1828791750 length=9.50 (connector)
+j_1828791750_c3 junction=j_1828791750 length=27.30 (connector)
+j_1828791750_c4 junction=j_1828791750 length=30.46 (connector)
+j_1828791750_c5 junction=j_1828791750 length=32.57 (connector)
+j_1828791750_c6 junction=j_1828791750 length=9.99 (connector)
+j_1828791750_c7 junction=j_1828791750 length=7.75 (connector)
+j_8913002169_c8 junction=j_8913002169 length=8.24 (connector)
+j_8913002169_c9 junction=j_8913002169 length=12.79 (connector)
+
+Warnings
+--------
+- Road w158689400_0: turn:lanes indicates 2 forward car lane(s) (after excluding non-car slots), overriding the lanes-derived count of 1.
+- Road w158689400_1: turn:lanes indicates 2 forward car lane(s) (after excluding non-car slots), overriding the lanes-derived count of 1.
+- Road w250829600_0: turn:lanes indicates 2 forward car lane(s) (after excluding non-car slots), overriding the lanes-derived count of 1.
+- Road w250829600_1: turn:lanes indicates 2 forward car lane(s) (after excluding non-car slots), overriding the lanes-derived count of 1.
+- Road w250829600_2: turn:lanes indicates 2 forward car lane(s) (after excluding non-car slots), overriding the lanes-derived count of 1.
+- 1 junction lane connection(s) could not fit a curved connector road within the available road geometry (roads too short, or an original bend too close to the junction) and were linked directly between the incoming and outgoing roads instead.

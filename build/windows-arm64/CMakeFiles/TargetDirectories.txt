@@ -1,0 +1,4 @@
+C:/Users/patfr/Documents/osm2xodr/build/windows-arm64/CMakeFiles/osm2xodr.dir
+C:/Users/patfr/Documents/osm2xodr/build/windows-arm64/CMakeFiles/INSTALL.dir
+C:/Users/patfr/Documents/osm2xodr/build/windows-arm64/CMakeFiles/ALL_BUILD.dir
+C:/Users/patfr/Documents/osm2xodr/build/windows-arm64/CMakeFiles/ZERO_CHECK.dir

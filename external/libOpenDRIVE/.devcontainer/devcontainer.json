@@ -1,0 +1,31 @@
+{
+    "name": "libopendrive-devcontainer",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "donjayamanne.githistory",
+                "ms-python.python",
+                "ms-vscode.cpptools-extension-pack",
+                "ms-vscode.cpptools"
+            ],
+            "settings": {
+                "C_Cpp.intelliSenseEngine": "default",
+                "C_Cpp.clang_format_style": "file",
+                "C_Cpp.clang_format_path": "/usr/bin/clang-format",
+                "C_Cpp.default.cppStandard": "c++17",
+                "cmake.preferredGenerators": ["Unix Makefiles"],
+                "[cpp]": {
+                    "editor.defaultFormatter": "ms-vscode.cpptools"
+                },
+                "[c]": {
+                    "editor.defaultFormatter": "ms-vscode.cpptools"
+                }
+            }
+        }
+    },
+    "workspaceFolder": "${localWorkspaceFolder}",
+    "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "osm2xodr",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "libosmium"
+  ]
+}

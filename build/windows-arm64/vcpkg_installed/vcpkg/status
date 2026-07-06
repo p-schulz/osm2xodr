@@ -1,0 +1,283 @@
+Package: vcpkg-cmake-config
+Version: 2024-05-23
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: b39968e6187a84b346ae425b43b48e5df5ba341dead693956ee7d194c0c10f8c
+Status: install ok installed
+
+Package: vcpkg-cmake
+Version: 2024-04-23
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: e0ce015c1f1ee67f0f39cd3f3b9afa33ad9bf0d6ad421504e421ed3be94ce8d0
+Status: install ok installed
+
+Package: zlib
+Version: 1.3.2
+Port-Version: 1
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: e72adf17bcae03a7c77c5709af42cf9fb7a6c2e1d2f2b9fb302291f89643f1f1
+Description: A compression library
+Status: install ok installed
+
+Package: protozero
+Version: 1.8.2
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 9beef203b85b4eb4cf5dfacce81cb8e125e608e01f713267ccebf2fd6778326c
+Description: Minimalist protocol buffer decoder and encoder in C++
+Status: install ok installed
+
+Package: lz4
+Version: 1.10.0
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 1829180f064a7e760841c19729bba7f56652bb4b6df66133f098d087b836d4b6
+Description: Lossless compression algorithm, providing compression speed at 400 MB/s per core.
+Status: install ok installed
+
+Package: expat
+Version: 2.8.2
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: d757e94134a0828e7251f4c5ae51f732d9a1928fb0f93c259fa0d700a407ae80
+Description: XML parser library written in C
+Status: install ok installed
+
+Package: bzip2
+Version: 1.0.8
+Port-Version: 6
+Depends: vcpkg-cmake
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: be3576bea7d3e940a45e68e13f780aa0f5782f399e49447cbfa83c47f46f2965
+Description: bzip2 is a freely available, patent free, high-quality data compressor. It typically compresses files to within 10% to 15% of the best available techniques (the PPM family of statistical compressors), whilst being around twice as fast at compression and six times faster at decompression.
+Default-Features: tool
+Status: install ok installed
+
+Package: bzip2
+Feature: tool
+Architecture: arm64-windows
+Multi-Arch: same
+Description: Builds bzip2 executable
+Status: install ok installed
+
+Package: vcpkg-boost
+Version: 2025-03-29
+Depends: vcpkg-cmake, vcpkg-cmake-config
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 6387565061256eeb9ef10834b976d54582bf3e924c8ab59ea8ce5e4ef06590d8
+Status: install ok installed
+
+Package: boost-uninstall
+Version: 1.91.0
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 3f6d450571dc08619bb488ec80b97983362aebc03534634303c80f9536cb70ea
+Description: Internal vcpkg port used to uninstall Boost
+Status: install ok installed
+
+Package: boost-cmake
+Version: 1.91.0
+Depends: boost-uninstall, vcpkg-boost
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: f1b86034561d048fcaf862f25edb235a2c69f886c7f08382f793eb731217fd88
+Description: Boost cmake module
+Status: install ok installed
+
+Package: boost-headers
+Version: 1.91.0
+Depends: boost-cmake
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 17e6ff30ebc7162c2b6051ea0f0397a24fbbacb51aae5dfab606cbdd0fda8d76
+Description: Boost headers module
+Status: install ok installed
+
+Package: boost-config
+Version: 1.91.0
+Depends: boost-cmake, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 2683c7bbb558ac8c2b6c4b7ead72ff28df2c6c631143a79d8623c6681b3421fb
+Description: Boost config module
+Status: install ok installed
+
+Package: boost-type-traits
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 9396032ef2e6289ae8b4667f78577507ba05d911cd09a6847bbef55898ba580f
+Description: Boost type_traits module
+Status: install ok installed
+
+Package: boost-assert
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 66c1f1866193488f9119e45464daceeca74c87fe0a611fe3f7afbfaffa67015e
+Description: Boost assert module
+Status: install ok installed
+
+Package: boost-throw-exception
+Version: 1.91.0
+Depends: boost-assert, boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: cf6c08914647f34586f589e87d2a942066ac9b570bc83c56b33c94b2b1299f29
+Description: Boost throw_exception module
+Status: install ok installed
+
+Package: boost-preprocessor
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: d02609ebdcfff0bc23daba4221a3dc8326c61b64a474c3e072a4bd825d62d930
+Description: Boost preprocessor module
+Status: install ok installed
+
+Package: boost-io
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: d719beaab58ad28e6f5a7f55a7dbb4e3c62de8948c8b755932b9e048a4905397
+Description: Boost io module
+Status: install ok installed
+
+Package: boost-core
+Version: 1.91.0
+Depends: boost-assert, boost-cmake, boost-config, boost-headers, boost-throw-exception
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 32868b4cccf18c889371b3f05aaa65d97e7b6b279b1483fb39a2ee25a1200e52
+Description: Boost core module
+Status: install ok installed
+
+Package: boost-utility
+Version: 1.91.0
+Depends: boost-assert, boost-cmake, boost-config, boost-core, boost-headers, boost-io, boost-preprocessor, boost-throw-exception, boost-type-traits
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: f91b0efab28a632055f304b556221b0f0a6dd28e6040010279e25f2d5911398a
+Description: Boost utility module
+Status: install ok installed
+
+Package: boost-mp11
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 39a46516056b680b4591739f940254b1748b9fe8e9840cb341c81fd9576fafed
+Description: Boost mp11 module
+Status: install ok installed
+
+Package: boost-describe
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers, boost-mp11
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: fd878421e94df9b8da1069baf65bb9ef3130133b125a1d0dc3284d8500cdbf8c
+Description: Boost describe module
+Status: install ok installed
+
+Package: boost-container-hash
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-describe, boost-headers, boost-mp11
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 10e0111b6b9d41aadac63fd0020d24866b9824593b95ea6afc9dffbd38abe2df
+Description: Boost container_hash module
+Status: install ok installed
+
+Package: boost-type-index
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-container-hash, boost-headers, boost-throw-exception
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 4ebee3a4ba724cdc3a2492587c79055c96b1b5057629db404e3c6dcb23fd5186
+Description: Boost type_index module
+Status: install ok installed
+
+Package: boost-static-assert
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 040c37b4f0560e949c9669d2c093e73bae219f90e75445da4b03d25fef7965de
+Description: Boost static_assert module
+Status: install ok installed
+
+Package: boost-predef
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 669189227efb13866d2704b0277d5a8f3a6a6cf880598468c97d38413024c37e
+Description: Boost predef module
+Status: install ok installed
+
+Package: boost-mpl
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-core, boost-headers, boost-predef, boost-preprocessor, boost-type-traits, boost-utility
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: cadece35640df34474280e2bb6dc7a976ebbee0e60d9227279fee8287cde0306
+Description: Boost mpl module
+Status: install ok installed
+
+Package: boost-integer
+Version: 1.91.0
+Depends: boost-assert, boost-cmake, boost-config, boost-core, boost-headers, boost-throw-exception, boost-type-traits
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 44f0d655b14a86d83ae7074c135814c872a2bc87c7a95747f01e466c9a26dde5
+Description: Boost integer module
+Status: install ok installed
+
+Package: boost-detail
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-core, boost-headers, boost-preprocessor, boost-type-traits
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: a025c1654ff66b668ea659c78d14661757287d4b66605fc9fda0b3962e8f1ee9
+Description: Boost detail module
+Status: install ok installed
+
+Package: boost-variant
+Version: 1.91.0
+Depends: boost-assert, boost-cmake, boost-config, boost-container-hash, boost-core, boost-detail, boost-headers, boost-integer, boost-mpl, boost-preprocessor, boost-static-assert, boost-throw-exception, boost-type-index, boost-type-traits, boost-utility
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: 2d81a84f94f34d687f71a93abce768225dbf0ec090f7b10797e9adfb5f4b052e
+Description: Boost variant module
+Status: install ok installed
+
+Package: boost-crc
+Version: 1.91.0
+Depends: boost-cmake, boost-config, boost-headers
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: de181af4d30d828b9471a94003690b3fed1c8b293558b8799d21a81d11900ac2
+Description: Boost crc module
+Status: install ok installed
+
+Package: libosmium
+Version: 2.23.1
+Depends: boost-crc, boost-variant, bzip2, expat, lz4, protozero, vcpkg-cmake, zlib
+Architecture: arm64-windows
+Multi-Arch: same
+Abi: fb1cc57a7d9db34430b00d195914ad62ae77644c9ca6dc4f6c5da3466d596322
+Description: A fast and flexible C++ library for working with OpenStreetMap data
+Status: install ok installed
+

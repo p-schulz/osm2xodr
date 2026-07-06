@@ -1,0 +1,72 @@
+osm2xodr conversion report
+=========================
+
+Input: intersection_small.osm
+Output: intersection_small.xodr
+OSM road ways parsed: 27
+OpenDRIVE roads written: 49 (20 junction connector roads)
+Junctions written: 3
+Compound junctions: 1 (merging 4 OSM junction nodes)
+Signals/signs written: 39
+Projection origin: lat=49.0116 lon=8.43652
+
+Road summary
+------------
+w4293512_0 source_way=4293512 length=76.27 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=0
+w653530865_0 source_way=653530865 length=85.83 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=2
+w134514684_1 source_way=134514684 length=5.65 forward=3 backward=0 left_lanes=0 right_lanes=3 signals=2
+w134514684_2 source_way=134514684 length=4.17 forward=3 backward=0 left_lanes=0 right_lanes=3 signals=1
+w134768964_0 source_way=134768964 length=169.67 forward=1 backward=1 left_lanes=2 right_lanes=2 signals=1
+w134769001_0 source_way=134769001 length=143.49 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=0
+w497755233_0 source_way=497755233 length=327.72 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=2
+w286661977_0 source_way=286661977 length=4.04 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=2
+w286661977_1 source_way=286661977 length=382.40 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=1
+w386625124_1 source_way=386625124 length=175.71 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=2
+w286661979_1 source_way=286661979 length=6.59 forward=3 backward=0 left_lanes=0 right_lanes=3 signals=3
+w286661979_2 source_way=286661979 length=4.26 forward=3 backward=0 left_lanes=0 right_lanes=3 signals=1
+w419898880_1 source_way=419898880 length=193.52 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=3
+w286661982_1 source_way=286661982 length=252.00 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=1
+w989035110_1 source_way=989035110 length=74.00 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=2
+w286661983_1 source_way=286661983 length=5.31 forward=2 backward=0 left_lanes=0 right_lanes=3 signals=2
+w286661983_2 source_way=286661983 length=4.95 forward=2 backward=0 left_lanes=0 right_lanes=3 signals=1
+w386625124_0 source_way=386625124 length=13.78 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=1
+w386625125_0 source_way=386625125 length=4.09 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=2
+w386625125_1 source_way=386625125 length=57.71 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=1
+w386625125_2 source_way=386625125 length=51.87 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=1
+w399458909_0 source_way=399458909 length=5.75 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=0
+w413980128_0 source_way=413980128 length=6.17 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=2
+w413980128_1 source_way=413980128 length=100.35 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=1
+w419898880_0 source_way=419898880 length=5.32 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=1
+w435930541_1 source_way=435930541 length=4.89 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=2
+w435930541_2 source_way=435930541 length=5.59 forward=2 backward=0 left_lanes=0 right_lanes=2 signals=1
+w487487452_0 source_way=487487452 length=27.71 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=0
+w989035110_0 source_way=989035110 length=38.97 forward=1 backward=0 left_lanes=0 right_lanes=1 signals=1
+j_4799358239_c0 junction=j_4799358239 length=6.94 (connector)
+j_4799358239_c1 junction=j_4799358239 length=6.26 (connector)
+j_25396608_c2 junction=j_25396608 length=25.20 (connector)
+j_25396608_c3 junction=j_25396608 length=25.32 (connector)
+j_25396608_c4 junction=j_25396608 length=33.99 (connector)
+j_25396608_c5 junction=j_25396608 length=4.08 (connector)
+j_25396608_c6 junction=j_25396608 length=26.15 (connector)
+j_25396608_c7 junction=j_25396608 length=20.80 (connector)
+j_25396608_c8 junction=j_25396608 length=19.98 (connector)
+j_25396608_c9 junction=j_25396608 length=25.04 (connector)
+j_25396608_c10 junction=j_25396608 length=4.63 (connector)
+j_25396608_c11 junction=j_25396608 length=30.74 (connector)
+j_25396608_c12 junction=j_25396608 length=25.59 (connector)
+j_25396608_c13 junction=j_25396608 length=25.51 (connector)
+j_25396608_c14 junction=j_25396608 length=4.36 (connector)
+j_4022006456_c15 junction=j_4022006456 length=17.78 (connector)
+j_4022006456_c16 junction=j_4022006456 length=17.88 (connector)
+j_4022006456_c17 junction=j_4022006456 length=10.32 (connector)
+j_4022006456_c18 junction=j_4022006456 length=7.95 (connector)
+j_4022006456_c19 junction=j_4022006456 length=11.86 (connector)
+
+Warnings
+--------
+- Merged road w653530865_0 has a lane-count change at s=41.575341 (from source way 134514684).
+- Merged road w497755233_0 has a lane-count change at s=286.870320 (from source way 286661975).
+- Merged road w386625124_1 has a lane-count change at s=108.390318 (from source way 286661979).
+- Merged road w989035110_1 has a lane-count change at s=15.595383 (from source way 419284323).
+- Point feature node 1478865238 (traffic_light) was not matched to a road within the search radius.
+- 2 junction lane connection(s) could not fit a curved connector road within the available road geometry (roads too short, or an original bend too close to the junction) and were linked directly between the incoming and outgoing roads instead.

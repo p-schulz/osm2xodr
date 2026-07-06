@@ -1,0 +1,13 @@
+arm64-windows/
+arm64-windows/include/
+arm64-windows/include/boost/
+arm64-windows/include/boost/crc.hpp
+arm64-windows/share/
+arm64-windows/share/boost-crc/
+arm64-windows/share/boost-crc/copyright
+arm64-windows/share/boost-crc/vcpkg.spdx.json
+arm64-windows/share/boost-crc/vcpkg_abi_info.txt
+arm64-windows/share/boost_crc/
+arm64-windows/share/boost_crc/boost_crc-config-version.cmake
+arm64-windows/share/boost_crc/boost_crc-config.cmake
+arm64-windows/share/boost_crc/boost_crc-targets.cmake

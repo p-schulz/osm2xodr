@@ -1,0 +1,33 @@
+osm2xodr conversion report
+=========================
+
+Input: examples/tiny_intersection.osm
+Output: build/windows-arm64/Release/tiny_intersection.xodr
+OSM road ways parsed: 2
+OpenDRIVE roads written: 16 (12 junction connector roads)
+Junctions written: 1
+Signals/signs written: 3
+Projection origin: lat=52 lon=13
+
+Road summary
+------------
+w101_0 source_way=101 length=41.91 forward=1 backward=1 left_lanes=2 right_lanes=2 signals=1
+w101_1 source_way=101 length=41.91 forward=1 backward=1 left_lanes=2 right_lanes=2 signals=1
+w102_0 source_way=102 length=20.52 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=0
+w102_1 source_way=102 length=20.52 forward=1 backward=1 left_lanes=1 right_lanes=1 signals=1
+j_2_c0 junction=j_2 length=27.50 (connector)
+j_2_c1 junction=j_2 length=25.85 (connector)
+j_2_c2 junction=j_2 length=18.85 (connector)
+j_2_c3 junction=j_2 length=27.50 (connector)
+j_2_c4 junction=j_2 length=18.85 (connector)
+j_2_c5 junction=j_2 length=25.85 (connector)
+j_2_c6 junction=j_2 length=18.85 (connector)
+j_2_c7 junction=j_2 length=25.85 (connector)
+j_2_c8 junction=j_2 length=27.50 (connector)
+j_2_c9 junction=j_2 length=25.85 (connector)
+j_2_c10 junction=j_2 length=18.85 (connector)
+j_2_c11 junction=j_2 length=27.50 (connector)
+
+Warnings
+--------
+None
