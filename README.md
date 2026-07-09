@@ -9,23 +9,6 @@
 
 It uses **[libosmium](https://github.com/osmcode/libosmium)** for OpenStreetMap parsing and node-location handling, and writes OpenDRIVE XML directly. **libOpenDRIVE** is optional and used only for read-back validation with `--validate`; it is not required for normal conversion.
 
-## Table of contents
-
-- [Current capabilities](#current-capabilities)
-- [Important limitations](#important-limitations)
-- [Quick start](#quick-start)
-- [Repository layout](#repository-layout)
-- [Dependencies](#dependencies)
-- [Building from source](#building-from-source)
-- [Optional libOpenDRIVE validation](#optional-libopendrive-validation)
-- [Manual/vendor libosmium setup](#manualvendor-libosmium-setup)
-- [Usage](#usage)
-- [Input notes](#input-notes)
-- [Troubleshooting](#troubleshooting)
-- [Development notes](#development-notes)
-- [Testing](#testing)
-- [Upstream references](#upstream-references)
-
 ## Current capabilities
 
 The converter is deliberately conservative. It creates usable, inspectable `.xodr` output, but OSM does not contain enough information to reconstruct all OpenDRIVE semantics exactly.
