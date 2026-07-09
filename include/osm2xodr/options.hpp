@@ -20,7 +20,11 @@ struct Options {
     bool merge_roads = true;
     bool merge_junctions = true;
     double junction_cluster_max_gap = 20.0;
+    bool absorb_signal_setbacks = true;
+    double junction_signal_setback_max_gap = 15.0;
     double lane_taper_length = 15.0;
+    bool bridge_lane_count_changes = true;
+    bool curve_fit = true;
     std::string report_path;
     bool validate = false;
 };

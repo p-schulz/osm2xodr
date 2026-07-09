@@ -43,9 +43,19 @@ def parse_xodr(data):
             arc_m = re.search(r'<arc\s+curvature="([^"]*)"', g.group(2))
             if arc_m:
                 curv = float(arc_m.group(1))
+            # A fitted curve (build::fit_curve) is written as paramPoly3 with pRange="normalized":
+            # the polynomial parameter p runs linearly over [0,1] across the geometry's own
+            # (chord) length, not true curve arc length -- see model_builder.cpp's fit_curve for
+            # why that's a safe, spec-compliant simplification. Store the raw coefficients rather
+            # than pre-evaluating anything, so eval_geometry_point can query any s within [0,length].
+            poly = None
+            poly_m = re.search(r'<paramPoly3\s+([^/]*)/>', g.group(2))
+            if poly_m:
+                pa = dict(re.findall(r'(\w+)="([^"]*)"', poly_m.group(1)))
+                poly = tuple(float(pa[k]) for k in ('aU', 'bU', 'cU', 'dU', 'aV', 'bV', 'cV', 'dV'))
             geoms.append({
                 'x': float(gattrs['x']), 'y': float(gattrs['y']),
-                'hdg': float(gattrs['hdg']), 'length': float(gattrs['length']), 'curv': curv,
+                'hdg': float(gattrs['hdg']), 'length': float(gattrs['length']), 'curv': curv, 'poly': poly,
             })
 
         def parse_link(mm):
@@ -73,7 +83,13 @@ def parse_xodr(data):
             lanes = {}
             for side_m in re.finditer(r'<(left|right)>(.*?)</\1>', ls_m.group(2), re.S):
                 side = side_m.group(1)
-                acc = 0.0  # cumulative base width of lanes already placed on this side (inner -> outer)
+                # Widths of lanes already placed on this side (inner -> outer), kept as (a, b) pairs
+                # rather than pre-summed: a lane's cumulative inner offset must be evaluated at the
+                # *query* s (each earlier lane's own width(s) = a + b*ds), not frozen at s=0 -- a
+                # ramping lane (lane split/merge taper, or this script's own reconciliation bridge)
+                # is not always the outermost one, so an s=0-only sum silently drifts away from the
+                # true cumulative width everywhere except exactly at the section's own s=0.
+                inner = []
                 for lane_m in re.finditer(r'<lane\s+id="(-?\d+)"[^>]*>(.*?)</lane>', side_m.group(2), re.S):
                     lid = int(lane_m.group(1))
                     width, width_b = 0.0, 0.0
@@ -81,8 +97,8 @@ def parse_xodr(data):
                     if width_m:
                         wa = dict(re.findall(r'(\w+)="([^"]*)"', width_m.group(1)))
                         width, width_b = float(wa['a']), float(wa.get('b', 0.0))
-                    lanes[lid] = {'width': width, 'width_b': width_b, 'side': side, 'inner_acc': acc}
-                    acc += width
+                    lanes[lid] = {'width': width, 'width_b': width_b, 'side': side, 'inner_lanes': list(inner)}
+                    inner.append((width, width_b))
             lane_sections.append((float(ls_attrs['s']), lanes))
         lane_sections.sort(key=lambda t: t[0])
 
@@ -105,7 +121,19 @@ def applicable_at_s(entries, s):
 
 
 def eval_geometry_point(g, s):
-    """Position/heading at arc-length `s` into a single line/arc planView primitive."""
+    """Position/heading at arc-length `s` into a single line/arc/paramPoly3 planView primitive."""
+    if g.get('poly') is not None:
+        aU, bU, cU, dU, aV, bV, cV, dV = g['poly']
+        p = s / g['length'] if g['length'] > 1e-9 else 0.0
+        u = aU + bU * p + cU * p * p + dU * p * p * p
+        v = aV + bV * p + cV * p * p + dV * p * p * p
+        du_dp = bU + 2.0 * cU * p + 3.0 * dU * p * p
+        dv_dp = bV + 2.0 * cV * p + 3.0 * dV * p * p
+        cos_h, sin_h = math.cos(g['hdg']), math.sin(g['hdg'])
+        x = g['x'] + u * cos_h - v * sin_h
+        y = g['y'] + u * sin_h + v * cos_h
+        hdg = g['hdg'] + math.atan2(dv_dp, du_dp)
+        return (x, y, hdg)
     if abs(g['curv']) < 1e-9:
         return (g['x'] + math.cos(g['hdg']) * s, g['y'] + math.sin(g['hdg']) * s, g['hdg'])
     r = 1.0 / g['curv']
@@ -137,7 +165,8 @@ def lane_centerline_at_s(roads, rid, lane_id, s, left_hand):
     lane = section_lanes[lane_id]
     lo_s, lo_a, lo_b = applicable_at_s(road['lane_offsets'], s)
     lane_offset = lo_a + lo_b * (s - lo_s)
-    cum = lane['inner_acc'] + (lane['width'] + lane['width_b'] * (s - section_s)) / 2.0
+    inner_acc = sum(w + wb * (s - section_s) for w, wb in lane['inner_lanes'])
+    cum = inner_acc + (lane['width'] + lane['width_b'] * (s - section_s)) / 2.0
     sign = 1.0 if lane['side'] == 'left' else -1.0
     total_offset = lane_offset + sign * cum
     nx, ny = left_normal(hdg)

@@ -1,0 +1,61 @@
+{
+  "_comment": "Fixture manifest for test/run_benchmark.py. 'tier' is 'junction' (small, curated, one interesting feature each -- suitable for imagery ground-truth comparison via export_geojson.py/compare_geojson.py) or 'region' (larger extracts, hundreds of roads/junctions -- suitable only for aggregate/self-consistency statistics, not per-junction manual verification). Add wider extracts under examples/regions/ and list them here with tier 'region' as they become available; see EVALUATION.md.",
+
+  "fixtures": [
+    {
+      "name": "tiny-intersection",
+      "osm": "examples/tiny_intersection.osm",
+      "tier": "junction",
+      "tags": ["synthetic", "smoke-test"]
+    },
+    {
+      "name": "3way-tram",
+      "osm": "examples/3way-tram.osm",
+      "tier": "junction",
+      "tags": ["tram", "3way"]
+    },
+    {
+      "name": "4way-crossing",
+      "osm": "examples/4way-crossing.osm",
+      "tier": "junction",
+      "tags": ["4way", "signals"]
+    },
+    {
+      "name": "durlacher-tor",
+      "osm": "examples/durlacher-tor.osm",
+      "tier": "junction",
+      "tags": ["compound-junction", "tram", "many-approaches"]
+    },
+    {
+      "name": "karl-wilhelm",
+      "osm": "examples/karl-wilhelm.osm",
+      "tier": "junction",
+      "tags": ["turn-lanes"]
+    },
+    {
+      "name": "intersection",
+      "osm": "examples/intersection.osm",
+      "tier": "junction",
+      "tags": []
+    },
+    {
+      "name": "scheck-in",
+      "osm": "examples/scheck-in.osm",
+      "tier": "junction",
+      "tags": []
+    },
+    {
+      "name": "lane-change",
+      "osm": "examples/lane_change.osm",
+      "tier": "junction",
+      "tags": ["lane-split-merge", "taper"]
+    }
+  ],
+
+  "flag_variants": {
+    "default": [],
+    "no-junction-merge": ["--no-junction-merge"],
+    "no-road-merge": ["--no-road-merge"],
+    "tight-cluster-gap": ["--junction-cluster-max-gap", "5"]
+  }
+}

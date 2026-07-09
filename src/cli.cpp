@@ -57,8 +57,17 @@ Options parse_args(const int argc, char** argv) {
                       << "  --junction-cluster-max-gap <m> Max length of an inter-junction road to fold into one\n"
                       << "                                 compound junction, default 20.0\n"
                       << "  --no-junction-merge            Disable compound-junction clustering\n"
+                      << "  --junction-signal-setback-max-gap <m>\n"
+                      << "                                 Max length of a traffic-light-to-junction stub road to\n"
+                      << "                                 absorb into the junction, default 15.0\n"
+                      << "  --no-signal-setback-absorption Disable absorbing traffic-light setback stubs into junctions\n"
                       << "  --lane-taper-length <m>        Target length over which an added/dropped lane's\n"
                       << "                                 width ramps to/from zero at a merge/split, default 15.0\n"
+                      << "  --no-lane-count-bridge         Disable inserting a short connecting road to reconcile a\n"
+                      << "                                 real lane-count change at a plain (non-junction) road-to-\n"
+                      << "                                 road boundary, e.g. right before a traffic signal\n"
+                      << "  --no-curve-fit                 Keep piecewise <line> planView geometry for non-junction\n"
+                      << "                                 roads instead of fitted <paramPoly3> curves\n"
                       << "  --report <file>                Write conversion report\n"
                       << "  --validate                     Read generated XODR back with libOpenDRIVE if enabled\n";
             std::exit(0);
@@ -86,8 +95,16 @@ Options parse_args(const int argc, char** argv) {
             o.junction_cluster_max_gap = util::parse_double_prefix(require_value(i, arg)).value_or(o.junction_cluster_max_gap);
         } else if (arg == "--no-junction-merge") {
             o.merge_junctions = false;
+        } else if (arg == "--junction-signal-setback-max-gap") {
+            o.junction_signal_setback_max_gap = util::parse_double_prefix(require_value(i, arg)).value_or(o.junction_signal_setback_max_gap);
+        } else if (arg == "--no-signal-setback-absorption") {
+            o.absorb_signal_setbacks = false;
         } else if (arg == "--lane-taper-length") {
             o.lane_taper_length = util::parse_double_prefix(require_value(i, arg)).value_or(o.lane_taper_length);
+        } else if (arg == "--no-lane-count-bridge") {
+            o.bridge_lane_count_changes = false;
+        } else if (arg == "--no-curve-fit") {
+            o.curve_fit = false;
         } else if (arg == "--report") {
             o.report_path = require_value(i, arg);
         } else if (arg == "--validate") {
@@ -103,6 +120,7 @@ Options parse_args(const int argc, char** argv) {
     if (o.signal_search_radius <= 0.0) util::fail("--signal-search-radius must be positive");
     if (o.junction_turn_radius <= 0.0) util::fail("--junction-turn-radius must be positive");
     if (o.junction_cluster_max_gap < 0.0) util::fail("--junction-cluster-max-gap must not be negative");
+    if (o.junction_signal_setback_max_gap < 0.0) util::fail("--junction-signal-setback-max-gap must not be negative");
     if (o.lane_taper_length <= 0.0) util::fail("--lane-taper-length must be positive");
     return o;
 }

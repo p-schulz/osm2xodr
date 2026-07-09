@@ -73,6 +73,21 @@ void write_plan_view(std::ostream& os, const model::RoadSegment& road, const int
             write_indent(os, indent + 4);
             if (g.kind == model::GeomKind::Arc) {
                 os << "<arc" << util::attr("curvature", g.curvature) << "/>\n";
+            } else if (g.kind == model::GeomKind::ParamPoly3) {
+                // Bezier control points (local frame, P0 implicit at the origin) to paramPoly3
+                // power-basis coefficients -- standard closed-form, specialized for P0=(0,0):
+                // a=0, b=3*P1, c=3*P2-6*P1, d=P3-3*P2+3*P1 (applied per axis).
+                const double bU = 3.0 * g.local_p1.x;
+                const double cU = 3.0 * g.local_p2.x - 6.0 * g.local_p1.x;
+                const double dU = g.local_p3.x - 3.0 * g.local_p2.x + 3.0 * g.local_p1.x;
+                const double bV = 3.0 * g.local_p1.y;
+                const double cV = 3.0 * g.local_p2.y - 6.0 * g.local_p1.y;
+                const double dV = g.local_p3.y - 3.0 * g.local_p2.y + 3.0 * g.local_p1.y;
+                os << "<paramPoly3" << util::attr("aU", 0.0) << util::attr("bU", bU)
+                   << util::attr("cU", cU) << util::attr("dU", dU)
+                   << util::attr("aV", 0.0) << util::attr("bV", bV)
+                   << util::attr("cV", cV) << util::attr("dV", dV)
+                   << util::attr("pRange", "normalized") << "/>\n";
             } else {
                 os << "<line/>\n";
             }
