@@ -48,30 +48,6 @@ The converter is deliberately conservative. It creates usable, inspectable `.xod
 - **Speed limits** — way-level `maxspeed=*` exported as OpenDRIVE signal records.
 - **Conversion report** with warnings about inferred or lossy data.
 
-## Details about the conversion process
-
-- **Road merging** — chains of way segments connected only by a plain pass-through node (not a junction, not a traffic-light/stop/give-way node) are fused back into a single OpenDRIVE `<road>`, even across OSM tag changes (lane count, width, name, highway class, `turn:lanes`-derived per-lane restrictions) &mdash; cross-section changes partway along a merged road become additional `<laneSection>`/`<type>` elements rather than a new `<road>`. A change in a lane's turn:lanes-derived permitted directions also forces its own `<laneSection>` boundary (a zero-geometry-impact split, since it never implies a width/type change on its own) so a restriction stays scoped to the way it was actually tagged on, instead of silently extending across an untagged continuation or being discarded when a tagged way merges *into* an untagged one. Disable with `--no-road-merge` to receive one `<road>` per OSM way segment.
-- **Lane split/merge tapering** — when a merge boundary's lane count actually changes (as opposed to a same-count width/type/roadmark change), the appearing/disappearing lane ramps its width to/from zero over `--lane-taper-length` (default 15m, capped to 40% of the adjacent way segment's own length) instead of popping in or out abruptly at the boundary, and the road's reference-line `<laneOffset>` gets a matching slope so it stays centered on the true (tapering) total cross-section width throughout. Which physical lane is the one appearing/disappearing (leftmost or rightmost) is decided by comparing `turn:lanes`-derived permitted directions on the lanes present on both sides of the boundary, not by assuming it's always the outermost one.
-- **Plain-boundary lane-count bridging** — a lane count can also change at a plain (non-junction) road-to-road boundary that isn't part of a merge chain, e.g. a lane genuinely ending right at a signalized crossing (a real, not-rare shape in city data). Unlike a same-chain lane split/merge (above), the two roads there stay separate `<road>` elements, so there's no single `<laneSection>` sequence to taper within; instead, both roads are trimmed back a short distance and a small synthetic bridging `<road>` is inserted between them (the same tangent-fillet line/arc construction as a junction connector), with every lane's width ramping from the upstream cross-section to the downstream one over its length and its `<laneOffset>` pinned to match each neighbor exactly, so lane position and heading stay continuous at both ends instead of jumping by roughly a lane width. Disable with `--no-lane-count-bridge` to fall back to a plain (topologically correct but not necessarily positionally continuous) direct link.
-- **PlanView geometry** — OpenDRIVE `<road>` elements with `<planView>` geometry for each OSM polyline segment. Non-junction roads are fitted as cubic `<paramPoly3>` curves rather than left as raw piecewise `<line>` segments: each pair of consecutive OSM-derived points gets a Bezier curve built from a Catmull-Rom-style tangent at each point, so consecutive pieces are heading-continuous at every original node instead of kinking there — while still passing through every original point exactly (an interpolating, not approximating, fit), so no existing lane-section/signal/junction-connector-trim bookkeeping (all still expressed in terms of the original straight-line arc length) needs to change. Endpoint tangents are pinned to the exact same directions junction connectors and lane-count bridges already assume, so those stay untouched and remain exactly aligned. Disable with `--no-curve-fit` to get piecewise-`<line>` output (junction connectors and lane-count bridges always use `<line>`/`<arc>` regardless of this flag, since they already guarantee exact continuity through their own tangent-fillet construction).
-- **Compound junction clustering** — real intersections are sometimes mapped as several close-together OSM junction nodes (tram tracks crossing at a slightly offset point, a wide junction's corner geometry, etc.) rather than one point. Any inter-junction road short enough to have no traffic light along it (`--junction-cluster-max-gap`, default 20m) is folded into one compound `<junction>` instead of a chain of tiny separate ones, so connector lanes span directly between the real approaches without leftover stub roads in between. Disable with `--no-junction-merge`.
-- **Junction-signal setback absorption** — a `highway=traffic_signals` node is commonly mapped a short distance before the real junction node it controls (representing the physical stop line), leaving a short "stub" `<road>` between the light and the junction; connectors would otherwise begin at the junction node, one node further downstream than where the network visually reads as "entering the intersection." Any such stub short enough (`--junction-signal-setback-max-gap`, default 15m) has its traffic-light end folded into the junction too, so connectors begin right at the light — the traffic light's own point feature isn't lost, it simply reattaches to the longer approach road that ends exactly there. Disable with `--no-signal-setback-absorption`.
-- **Physically modelled junction connectors** — incoming/outgoing roads are shortened back from the junction node, and each incoming-lane-to-outgoing-lane movement gets its own connector `<road>` (line/arc/line planView) sized from a tangent-fillet turn radius, so lane heading and position match exactly at both ends. The turn radius is tiered by OSM highway class (motorway/trunk down to service), with `--junction-turn-radius` as the fallback for unmapped classes, and re-maximized against each road end's actual available setback so a shared endpoint's spare room becomes a longer, gentler curve rather than a small arc padded with straight lead-in/lead-out. Every movement — not just ones that already fit their own per-movement budget — claims whatever budget is actually available at its road ends (capped to what exists), so a movement that's "infeasible" only because its own ideal/floor-forced radius exceeded its own share still gets a real, trimmed connector rather than an untrimmed, silently-kinked direct link. When a movement's own turn radius doesn't fit its own trim budget but another movement sharing the same road end still forces that end to be trimmed back, the radius is re-fit against the final trim (shrinking if necessary); if that still can't produce a real tangent-fillet arc, the connector is instead built as a single cubic Bezier (`<paramPoly3>`, via the same `build::hermite_bezier_segment` non-junction roads use for curve fitting) matching the incoming and outgoing lane's own heading exactly at each end — unlike a straight-line bridge, which can only assert one fixed heading and accepts whichever end it matches less badly. A 45° sanity check on the endpoint-to-endpoint chord direction still gates whether to attempt this at all (an extreme, near-reversed pairing can make a Bezier loop back on itself rather than read as a real road shape); when even that fails, or a connector cannot fit within the available road geometry at all (very short segments, or a bend too close to the junction), the movement falls back to a direct road-to-road junction link with no connector geometry.
-- **Per-lane `<link>` continuity** at plain (non-junction) road-to-road boundaries — e.g. a feature-split traffic light/stop sign, or any two separate roads meeting directly at a node. Each lane's own `<link>` is populated too (matched positionally by type, reciprocal on both sides), working out which physical side carries arriving vs. departing traffic for all four possible combinations of which road end (start/end) touches the shared node, and respecting `--left-hand-traffic`.
-- **Turn-lane-aware junction routing** — `turn:lanes`/`turn:lanes:forward`/`turn:lanes:backward` (cross-checked against `access:lanes`/`vehicle:lanes` to exclude interleaved bike/bus lane slots) gives the real car-lane count and each lane's permitted direction(s), overriding the often-inconsistent plain `lanes=N` tag. A lane with a parsed restriction only connects to junction movements whose actual geometric direction (through/left/right/slight_*/sharp_*) matches it, instead of every incoming lane wiring to every destination. That direction is classified from a look-ahead chord along the destination/approach road's own reference line (default 15m, capped to the road's own length) rather than the immediate first-micro-segment tangent the connector geometry itself must use for continuity -- a mapped ramp/slip-lane approximated with several short internal segments can curve well past its first meter or two, and classifying from only that first sliver would call a road that ends up turning 90+ degrees "through" simply because it starts out nearly straight. A lane tagged plain `left`/`right` also matches the immediately adjacent `slight_left`/`slight_right` classification (not just an exact bucket match), since most OSM mappers don't bother distinguishing a gentle bend from a "full" turn unless they specifically mean to.
-
-## Important limitations
-
-- Non-junction road geometry is fitted as `<paramPoly3>` curves that are heading-continuous at every original OSM node (see "PlanView geometry" above), so a genuine mapper digitization kink is smoothed over rather than left as a visible discontinuity -- the *position* of every original node is still preserved exactly, only the heading in between is smoothed. With `--no-curve-fit` the raw piecewise `<line>` shape is used as-is, so a heading "kink" between two adjacent segments there is usually the mapper's own digitization, not a converter error (OSM node positions are frequently only accurate to a few meters). Junction connectors and lane-count bridges are unaffected by `--no-curve-fit` either way -- they always use whichever of line/arc/paramPoly3 their own tangent-fillet-or-bridge construction picks, since they already guarantee exact continuity through it. No fitted spirals/clothoids for the OSM polylines themselves, only cubic curves.
-- A junction connector that can't fit a real tangent-fillet arc within its available trim room gets a curve-fitted `<paramPoly3>` bridge matching both ends' heading exactly (see above) rather than a heading-imprecise straight line, so this case is largely resolved; a connector can still fall back further to a plain direct link with no geometry at all when even that isn't plausible (see above) or the geometry genuinely doesn't fit. `test/check_junction_continuity.py` reports any remaining mismatch so it stays visible; a reported mismatch is not automatically a converter bug in that case.
-- `restriction=*` turn-restriction relations are not read; only per-lane `turn:lanes` data (when present on the way itself) filters junction routing. A lane with no `turn:lanes` tag still wires to every compatible destination, as before.
-- Compound junction clustering is a general, distance-capped mechanism, not a semantic one: it cannot distinguish "one physical intersection mapped with extra nodes" from "two genuinely separate intersections on a short, unsignalled block" by geometry alone. `--junction-cluster-max-gap` is a blunt safety valve, tuned against real tram-adjacent intersections; very short ordinary city blocks could in principle be merged incorrectly.
-- Junction-signal setback absorption only looks one hop back from a real junction node, and only across a node tagged specifically `highway=traffic_signals`/`crossing=traffic_signals` (not stop/give-way signs) -- a stub longer than `--junction-signal-setback-max-gap`, or with the feature disabled via `--no-signal-setback-absorption`, keeps today's behavior of connectors starting at the downstream junction node instead.
-- The lane split/merge taper length is a fixed heuristic (`--lane-taper-length`), not derived from design speed or any real-world taper-rate standard, and the "which side is the new lane" decision falls back to "assume it's at the end" when turn-direction overlap scoring ties (e.g. neither side's lanes carry any `turn:lanes` data at all).
-- Plain-boundary lane-count bridging only handles the "one road ends here, the other starts here" topology (a straight continuation); the rarer case of two roads both ending or both starting at the same plain node falls back to a direct link with no positional reconciliation, same as before this feature existed. It also declines (same fallback) when the two roads' headings are close to a full reversal, or when there isn't enough room to trim -- it never forces a bridge where one doesn't fit safely.
-- OSM sign tagging is country-specific and inconsistent; the converter preserves raw sign text/type where exact OpenDRIVE catalogue mapping is not known.
-- Standalone sidewalk ways are not fused into adjacent roads; sidewalk support is lane-based through road tags.
-- Elevation, superelevation, detailed traffic-light phases, turn restrictions, lane-specific access, and relation-based complex intersections are scaffolding targets, not fully solved in this prototype.
 
 ## Quick start
 
@@ -92,42 +68,6 @@ cmake --build build -j
 
 For Windows, Fedora, Arch, vcpkg, or a manually vendored dependency tree, see [Building from source](#building-from-source).
 
-## Repository layout
-
-```text
-osm2xodr/
-  CMakeLists.txt
-  README.md
-  vcpkg.json                  Optional vcpkg manifest for libosmium
-  cmake/FindOsmium.cmake       Fallback CMake finder for libosmium
-  include/osm2xodr/            Public headers, one per module
-    util.hpp                    String/number parsing helpers
-    geo.hpp                      Local projection, vector math, polyline helpers
-    options.hpp                   Options (CLI-configurable parameters)
-    tags.hpp                       OSM tag helpers
-    osm_parse.hpp                   libosmium handler and raw OSM feature extraction
-    model.hpp                       Normalized road/lane/signal/junction structures
-    infer.hpp                        OSM tag-to-road/lane/signal inference
-    model_builder.hpp                 build::build_model() entry point
-    xodr_writer.hpp                    OpenDRIVE XML writer
-    report.hpp                          Conversion report writer
-    cli.hpp                              Command-line argument parsing
-  src/                          Implementation; one .cpp per header, plus main.cpp
-    main.cpp                     Thin CLI entry point (run() + main())
-    cli.cpp
-    osm_parse.cpp
-    infer.cpp
-    model_builder.cpp             ModelBuilder: road-fragment/merge/junction/signal pipeline
-    xodr_writer.cpp
-    report.cpp
-  examples/tiny_intersection.osm
-  external/                    Optional manual/vendor dependencies
-    libosmium/                 Optional; only needed if not installed system-wide
-    protozero/                 Optional; only needed if not installed system-wide
-    libOpenDRIVE/              Optional; only needed if not using FetchContent
-```
-
-Keep third-party code under `external/` or install it through your package manager. Do not copy libosmium or libOpenDRIVE into `src/`.
 
 ## Dependencies
 
@@ -173,6 +113,68 @@ libOpenDRIVE/src/...
 Do not copy only `OpenDriveMap.h`; that header depends on the rest of libOpenDRIVE.
 
 </details>
+
+
+## Usage
+
+```bash
+./build/osm2xodr input.osm.pbf output.xodr --name "example-map"
+```
+
+On Windows with the Visual Studio generator:
+
+```powershell
+.\build\Release\osm2xodr.exe input.osm.pbf output.xodr --name "example-map"
+```
+
+Useful options:
+
+| Option | Description |
+| --- | --- |
+| `--origin-lat <deg>` | Override local projection origin latitude |
+| `--origin-lon <deg>` | Override local projection origin longitude |
+| `--default-lane-width <m>` | Default width when OSM has no width tags; default `3.50` |
+| `--sidewalk-width <m>` | Width of generated sidewalk lanes; default `2.00` |
+| `--left-hand-traffic` | Use left-hand lane-direction assumptions |
+| `--junction-degree <n>` | Minimum endpoint degree to classify as junction; default `3` |
+| `--signal-search-radius <m>` | Max distance for matching sign/signal nodes to roads; default `20` |
+| `--junction-turn-radius <m>` | Fallback connector turn radius for highway classes without a specific tier; default `8.0` |
+| `--no-road-merge` | Keep one `<road>` per OSM way segment (disable road merging) |
+| `--junction-cluster-max-gap <m>` | Max length of an inter-junction road to fold into one compound junction; default `20.0` |
+| `--junction-signal-setback-max-gap <m>` | Max length of a traffic-light-to-junction stub road to absorb into the junction; default `15.0` |
+| `--no-signal-setback-absorption` | Disable absorbing traffic-light setback stubs into junctions |
+| `--no-junction-merge` | Disable compound-junction clustering |
+| `--lane-taper-length <m>` | Target length for a lane split/merge width taper; default `15.0` |
+| `--no-lane-count-bridge` | Disable inserting a reconciliation road at a plain-boundary lane-count change |
+| `--no-curve-fit` | Keep piecewise `<line>` planView geometry for non-junction roads instead of fitted `<paramPoly3>` curves |
+| `--report <file>` | Write a conversion report |
+| `--validate` | Read generated `.xodr` back with libOpenDRIVE, when compiled with validation support |
+
+
+## Details about the conversion process
+
+- **Road merging** — chains of way segments connected only by a plain pass-through node (not a junction, not a traffic-light/stop/give-way node) are fused back into a single OpenDRIVE `<road>`, even across OSM tag changes (lane count, width, name, highway class, `turn:lanes`-derived per-lane restrictions) &mdash; cross-section changes partway along a merged road become additional `<laneSection>`/`<type>` elements rather than a new `<road>`. A change in a lane's turn:lanes-derived permitted directions also forces its own `<laneSection>` boundary (a zero-geometry-impact split, since it never implies a width/type change on its own) so a restriction stays scoped to the way it was actually tagged on, instead of silently extending across an untagged continuation or being discarded when a tagged way merges *into* an untagged one. Disable with `--no-road-merge` to receive one `<road>` per OSM way segment.
+- **Lane split/merge tapering** — when a merge boundary's lane count actually changes (as opposed to a same-count width/type/roadmark change), the appearing/disappearing lane ramps its width to/from zero over `--lane-taper-length` (default 15m, capped to 40% of the adjacent way segment's own length) instead of popping in or out abruptly at the boundary, and the road's reference-line `<laneOffset>` gets a matching slope so it stays centered on the true (tapering) total cross-section width throughout. Which physical lane is the one appearing/disappearing (leftmost or rightmost) is decided by comparing `turn:lanes`-derived permitted directions on the lanes present on both sides of the boundary, not by assuming it's always the outermost one.
+- **Plain-boundary lane-count bridging** — a lane count can also change at a plain (non-junction) road-to-road boundary that isn't part of a merge chain, e.g. a lane genuinely ending right at a signalized crossing (a real, not-rare shape in city data). Unlike a same-chain lane split/merge (above), the two roads there stay separate `<road>` elements, so there's no single `<laneSection>` sequence to taper within; instead, both roads are trimmed back a short distance and a small synthetic bridging `<road>` is inserted between them (the same tangent-fillet line/arc construction as a junction connector), with every lane's width ramping from the upstream cross-section to the downstream one over its length and its `<laneOffset>` pinned to match each neighbor exactly, so lane position and heading stay continuous at both ends instead of jumping by roughly a lane width. Disable with `--no-lane-count-bridge` to fall back to a plain (topologically correct but not necessarily positionally continuous) direct link.
+- **PlanView geometry** — OpenDRIVE `<road>` elements with `<planView>` geometry for each OSM polyline segment. Non-junction roads are fitted as cubic `<paramPoly3>` curves rather than left as raw piecewise `<line>` segments: each pair of consecutive OSM-derived points gets a Bezier curve built from a Catmull-Rom-style tangent at each point, so consecutive pieces are heading-continuous at every original node instead of kinking there — while still passing through every original point exactly (an interpolating, not approximating, fit), so no existing lane-section/signal/junction-connector-trim bookkeeping (all still expressed in terms of the original straight-line arc length) needs to change. Endpoint tangents are pinned to the exact same directions junction connectors and lane-count bridges already assume, so those stay untouched and remain exactly aligned. Disable with `--no-curve-fit` to get piecewise-`<line>` output (junction connectors and lane-count bridges always use `<line>`/`<arc>` regardless of this flag, since they already guarantee exact continuity through their own tangent-fillet construction).
+- **Compound junction clustering** — real intersections are sometimes mapped as several close-together OSM junction nodes (tram tracks crossing at a slightly offset point, a wide junction's corner geometry, etc.) rather than one point. Any inter-junction road short enough to have no traffic light along it (`--junction-cluster-max-gap`, default 20m) is folded into one compound `<junction>` instead of a chain of tiny separate ones, so connector lanes span directly between the real approaches without leftover stub roads in between. Disable with `--no-junction-merge`.
+- **Junction-signal setback absorption** — a `highway=traffic_signals` node is commonly mapped a short distance before the real junction node it controls (representing the physical stop line), leaving a short "stub" `<road>` between the light and the junction; connectors would otherwise begin at the junction node, one node further downstream than where the network visually reads as "entering the intersection." Any such stub short enough (`--junction-signal-setback-max-gap`, default 15m) has its traffic-light end folded into the junction too, so connectors begin right at the light — the traffic light's own point feature isn't lost, it simply reattaches to the longer approach road that ends exactly there. Disable with `--no-signal-setback-absorption`.
+- **Physically modelled junction connectors** — incoming/outgoing roads are shortened back from the junction node, and each incoming-lane-to-outgoing-lane movement gets its own connector `<road>` (line/arc/line planView) sized from a tangent-fillet turn radius, so lane heading and position match exactly at both ends. The turn radius is tiered by OSM highway class (motorway/trunk down to service), with `--junction-turn-radius` as the fallback for unmapped classes, and re-maximized against each road end's actual available setback so a shared endpoint's spare room becomes a longer, gentler curve rather than a small arc padded with straight lead-in/lead-out. Every movement — not just ones that already fit their own per-movement budget — claims whatever budget is actually available at its road ends (capped to what exists), so a movement that's "infeasible" only because its own ideal/floor-forced radius exceeded its own share still gets a real, trimmed connector rather than an untrimmed, silently-kinked direct link. When a movement's own turn radius doesn't fit its own trim budget but another movement sharing the same road end still forces that end to be trimmed back, the radius is re-fit against the final trim (shrinking if necessary); if that still can't produce a real tangent-fillet arc, the connector is instead built as a single cubic Bezier (`<paramPoly3>`, via the same `build::hermite_bezier_segment` non-junction roads use for curve fitting) matching the incoming and outgoing lane's own heading exactly at each end — unlike a straight-line bridge, which can only assert one fixed heading and accepts whichever end it matches less badly. A 45° sanity check on the endpoint-to-endpoint chord direction still gates whether to attempt this at all (an extreme, near-reversed pairing can make a Bezier loop back on itself rather than read as a real road shape); when even that fails, or a connector cannot fit within the available road geometry at all (very short segments, or a bend too close to the junction), the movement falls back to a direct road-to-road junction link with no connector geometry.
+- **Per-lane `<link>` continuity** at plain (non-junction) road-to-road boundaries — e.g. a feature-split traffic light/stop sign, or any two separate roads meeting directly at a node. Each lane's own `<link>` is populated too (matched positionally by type, reciprocal on both sides), working out which physical side carries arriving vs. departing traffic for all four possible combinations of which road end (start/end) touches the shared node, and respecting `--left-hand-traffic`.
+- **Turn-lane-aware junction routing** — `turn:lanes`/`turn:lanes:forward`/`turn:lanes:backward` (cross-checked against `access:lanes`/`vehicle:lanes` to exclude interleaved bike/bus lane slots) gives the real car-lane count and each lane's permitted direction(s), overriding the often-inconsistent plain `lanes=N` tag. A lane with a parsed restriction only connects to junction movements whose actual geometric direction (through/left/right/slight_*/sharp_*) matches it, instead of every incoming lane wiring to every destination. That direction is classified from a look-ahead chord along the destination/approach road's own reference line (default 15m, capped to the road's own length) rather than the immediate first-micro-segment tangent the connector geometry itself must use for continuity -- a mapped ramp/slip-lane approximated with several short internal segments can curve well past its first meter or two, and classifying from only that first sliver would call a road that ends up turning 90+ degrees "through" simply because it starts out nearly straight. A lane tagged plain `left`/`right` also matches the immediately adjacent `slight_left`/`slight_right` classification (not just an exact bucket match), since most OSM mappers don't bother distinguishing a gentle bend from a "full" turn unless they specifically mean to.
+
+## Important limitations
+
+- Non-junction road geometry is fitted as `<paramPoly3>` curves that are heading-continuous at every original OSM node (see "PlanView geometry" above), so a genuine mapper digitization kink is smoothed over rather than left as a visible discontinuity -- the *position* of every original node is still preserved exactly, only the heading in between is smoothed. With `--no-curve-fit` the raw piecewise `<line>` shape is used as-is, so a heading "kink" between two adjacent segments there is usually the mapper's own digitization, not a converter error (OSM node positions are frequently only accurate to a few meters). Junction connectors and lane-count bridges are unaffected by `--no-curve-fit` either way -- they always use whichever of line/arc/paramPoly3 their own tangent-fillet-or-bridge construction picks, since they already guarantee exact continuity through it. No fitted spirals/clothoids for the OSM polylines themselves, only cubic curves.
+- A junction connector that can't fit a real tangent-fillet arc within its available trim room gets a curve-fitted `<paramPoly3>` bridge matching both ends' heading exactly (see above) rather than a heading-imprecise straight line, so this case is largely resolved; a connector can still fall back further to a plain direct link with no geometry at all when even that isn't plausible (see above) or the geometry genuinely doesn't fit. `test/check_junction_continuity.py` reports any remaining mismatch so it stays visible; a reported mismatch is not automatically a converter bug in that case.
+- `restriction=*` turn-restriction relations are not read; only per-lane `turn:lanes` data (when present on the way itself) filters junction routing. A lane with no `turn:lanes` tag still wires to every compatible destination, as before.
+- Compound junction clustering is a general, distance-capped mechanism, not a semantic one: it cannot distinguish "one physical intersection mapped with extra nodes" from "two genuinely separate intersections on a short, unsignalled block" by geometry alone. `--junction-cluster-max-gap` is a blunt safety valve, tuned against real tram-adjacent intersections; very short ordinary city blocks could in principle be merged incorrectly.
+- Junction-signal setback absorption only looks one hop back from a real junction node, and only across a node tagged specifically `highway=traffic_signals`/`crossing=traffic_signals` (not stop/give-way signs) -- a stub longer than `--junction-signal-setback-max-gap`, or with the feature disabled via `--no-signal-setback-absorption`, keeps today's behavior of connectors starting at the downstream junction node instead.
+- The lane split/merge taper length is a fixed heuristic (`--lane-taper-length`), not derived from design speed or any real-world taper-rate standard, and the "which side is the new lane" decision falls back to "assume it's at the end" when turn-direction overlap scoring ties (e.g. neither side's lanes carry any `turn:lanes` data at all).
+- Plain-boundary lane-count bridging only handles the "one road ends here, the other starts here" topology (a straight continuation); the rarer case of two roads both ending or both starting at the same plain node falls back to a direct link with no positional reconciliation, same as before this feature existed. It also declines (same fallback) when the two roads' headings are close to a full reversal, or when there isn't enough room to trim -- it never forces a bridge where one doesn't fit safely.
+- OSM sign tagging is country-specific and inconsistent; the converter preserves raw sign text/type where exact OpenDRIVE catalogue mapping is not known.
+- Standalone sidewalk ways are not fused into adjacent roads; sidewalk support is lane-based through road tags.
+- Elevation, superelevation, detailed traffic-light phases, turn restrictions, lane-specific access, and relation-based complex intersections are scaffolding targets, not fully solved in this prototype.
 
 ## Building from source
 
@@ -415,41 +417,6 @@ cmake --build build -j
 ```
 
 You still need zlib, bzip2, expat, threads, and Boost headers installed or discoverable by CMake. On Windows, manual dependency wiring is possible but not pleasant; vcpkg is strongly preferred.
-
-## Usage
-
-```bash
-./build/osm2xodr input.osm.pbf output.xodr --name "example-map"
-```
-
-On Windows with the Visual Studio generator:
-
-```powershell
-.\build\Release\osm2xodr.exe input.osm.pbf output.xodr --name "example-map"
-```
-
-Useful options:
-
-| Option | Description |
-| --- | --- |
-| `--origin-lat <deg>` | Override local projection origin latitude |
-| `--origin-lon <deg>` | Override local projection origin longitude |
-| `--default-lane-width <m>` | Default width when OSM has no width tags; default `3.50` |
-| `--sidewalk-width <m>` | Width of generated sidewalk lanes; default `2.00` |
-| `--left-hand-traffic` | Use left-hand lane-direction assumptions |
-| `--junction-degree <n>` | Minimum endpoint degree to classify as junction; default `3` |
-| `--signal-search-radius <m>` | Max distance for matching sign/signal nodes to roads; default `20` |
-| `--junction-turn-radius <m>` | Fallback connector turn radius for highway classes without a specific tier; default `8.0` |
-| `--no-road-merge` | Keep one `<road>` per OSM way segment (disable road merging) |
-| `--junction-cluster-max-gap <m>` | Max length of an inter-junction road to fold into one compound junction; default `20.0` |
-| `--junction-signal-setback-max-gap <m>` | Max length of a traffic-light-to-junction stub road to absorb into the junction; default `15.0` |
-| `--no-signal-setback-absorption` | Disable absorbing traffic-light setback stubs into junctions |
-| `--no-junction-merge` | Disable compound-junction clustering |
-| `--lane-taper-length <m>` | Target length for a lane split/merge width taper; default `15.0` |
-| `--no-lane-count-bridge` | Disable inserting a reconciliation road at a plain-boundary lane-count change |
-| `--no-curve-fit` | Keep piecewise `<line>` planView geometry for non-junction roads instead of fitted `<paramPoly3>` curves |
-| `--report <file>` | Write a conversion report |
-| `--validate` | Read generated `.xodr` back with libOpenDRIVE, when compiled with validation support |
 
 ## Input notes
 
