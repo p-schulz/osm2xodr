@@ -233,6 +233,28 @@ model::GeomPrimitive hermite_bezier_segment(const geo::Vec2& p0, const geo::Vec2
     return g;
 }
 
+// Unit +s-direction tangent of a GeomPrimitive at its own p=0/p=1 (Line/Arc: along hdg either end;
+// ParamPoly3: local_p1's own direction at p=0, local_p3-local_p2's direction at p=1 -- the standard
+// Bezier start/end derivative identities, applied to the same local frame hermite_bezier_segment
+// builds its control points in). Used by fix_link_continuity to read a boundary-adjacent primitive's
+// current tangent without needing the original `points` it was built from.
+geo::Vec2 rotate_to_global(const geo::Vec2& local_dir, const double hdg) {
+    const double cos_h = std::cos(hdg), sin_h = std::sin(hdg);
+    return {local_dir.x * cos_h - local_dir.y * sin_h, local_dir.x * sin_h + local_dir.y * cos_h};
+}
+geo::Vec2 primitive_start_tangent(const model::GeomPrimitive& g) {
+    if (g.kind != model::GeomKind::ParamPoly3) return {std::cos(g.hdg), std::sin(g.hdg)};
+    return rotate_to_global(geo::normalize(g.local_p1), g.hdg);
+}
+geo::Vec2 primitive_end_tangent(const model::GeomPrimitive& g) {
+    if (g.kind != model::GeomKind::ParamPoly3) return {std::cos(g.hdg), std::sin(g.hdg)};
+    return rotate_to_global(geo::normalize(g.local_p3 - g.local_p2), g.hdg);
+}
+geo::Vec2 primitive_start_point(const model::GeomPrimitive& g) { return {g.x, g.y}; }
+geo::Vec2 primitive_end_point(const model::GeomPrimitive& g) {
+    return {g.x + g.length * std::cos(g.hdg), g.y + g.length * std::sin(g.hdg)};
+}
+
 // One GeomPrimitive per consecutive pair of `points`, via hermite_bezier_segment above using the
 // Catmull-Rom tangents at each point.
 std::vector<model::GeomPrimitive> fit_curve(const std::vector<geo::Vec2>& points) {
@@ -323,24 +345,89 @@ bool lane_allows_movement(const model::RoadSegment& road, const bool at_start, c
     return false;
 }
 
+// Ordered by angle, sharpest-left to sharpest-right -- used only to measure how "close" two
+// buckets are when a lane's own tag doesn't match anything actually available at its junction.
+const std::vector<std::string> kTurnBucketOrder = {
+    "sharp_left", "left", "slight_left", "through", "slight_right", "right", "sharp_right"};
+
+int turn_bucket_index(const std::string& bucket) {
+    for (std::size_t i = 0; i < kTurnBucketOrder.size(); ++i) {
+        if (kTurnBucketOrder[i] == bucket) return static_cast<int>(i);
+    }
+    return turn_bucket_index("through"); // unrecognized -- treat as neutral
+}
+
+// Maps a raw turn_directions token to the bucket used for the closeness measure below; merge_to_*
+// alias to their slight_* counterpart (matching lane_allows_movement's own aliasing), "reverse"/
+// "none"/anything else has no natural position on this scale and is skipped by the caller.
+std::optional<int> turn_direction_bucket_index(const std::string& token) {
+    if (token == "merge_to_left") return turn_bucket_index("slight_left");
+    if (token == "merge_to_right") return turn_bucket_index("slight_right");
+    for (const auto& b : kTurnBucketOrder) {
+        if (b == token) return turn_bucket_index(token);
+    }
+    return std::nullopt;
+}
+
+// A lane whose turn:lanes tag doesn't match any movement actually available at its own junction
+// (e.g. tagged exclusively "left" but this junction's own geometry offers only "through"/"right")
+// would otherwise end up with zero connections -- a dead end for anything routing through the
+// exported network. Rather than leave it disconnected, fall back to whichever available bucket is
+// angularly closest to what the lane's own tag asked for, same spirit as lane_allows_movement's
+// existing slight_*-adjacency widening, just reaching further when nothing closer exists. Returns
+// nullopt if the lane is unrestricted (already matches everything, so never "orphaned") or none of
+// its own tokens have a placement on the ordered scale (e.g. only "reverse"/"none").
+std::optional<std::string> lane_fallback_bucket(const model::RoadSegment& road, const bool at_start,
+                                                  const int lane_id, const std::vector<std::string>& available_buckets) {
+    const auto* lane = lane_spec_for(road, at_start, lane_id);
+    if (!lane || lane->turn_directions.empty() || available_buckets.empty()) return std::nullopt;
+    int best_distance = -1;
+    std::string best_bucket;
+    for (const auto& token : lane->turn_directions) {
+        const auto own_index = turn_direction_bucket_index(token);
+        if (!own_index) continue;
+        for (const auto& candidate : available_buckets) {
+            const int distance = std::abs(*own_index - turn_bucket_index(candidate));
+            if (best_distance < 0 || distance < best_distance) {
+                best_distance = distance;
+                best_bucket = candidate;
+            }
+        }
+    }
+    if (best_distance < 0) return std::nullopt;
+    return best_bucket;
+}
+
 // Signed lateral distance of a lane's centerline from the road's reference line (road.points),
-// positive = left of the road's own +s direction, matching OpenDRIVE's t-axis convention.
+// positive = left of the road's own +s direction, matching OpenDRIVE's t-axis convention. At the
+// road's far end (!at_start), both the section's own laneOffset and each lane's own width must be
+// evaluated at that section's local *end*, not its s=0: lane_offset_at_road_end already does this
+// for the reference-line offset (slope * local length, not the section's raw s=0 field), and a
+// tapering lane's own width there is width_end (its target width), not width (its s=0 value) --
+// using the s=0 values here instead, as this used to, silently ignores where an active taper
+// section actually reaches by the time this is called with at_start=false, going quietly unnoticed
+// until a lane splits right at a junction-adjacent boundary (only there does this function get
+// queried at the exact end of an active taper).
 double lane_lateral_offset(const model::RoadSegment& road, const bool at_start, const int lane_id) {
     const auto& lanes = lanes_at_end(road, at_start);
+    const auto width_at_query = [&](const model::LaneSpec& lane) {
+        return (!at_start && lane.width_end >= 0.0) ? lane.width_end : lane.width;
+    };
+    const double base_offset = lane_offset_at_road_end(road, at_start);
     if (lane_id > 0) {
         double acc = 0.0;
         for (const auto& lane : lanes.left) {
-            if (lane.id == lane_id) return lanes.lane_offset + acc + lane.width / 2.0;
-            acc += lane.width;
+            if (lane.id == lane_id) return base_offset + acc + width_at_query(lane) / 2.0;
+            acc += width_at_query(lane);
         }
     } else if (lane_id < 0) {
         double acc = 0.0;
         for (const auto& lane : lanes.right) {
-            if (lane.id == lane_id) return lanes.lane_offset - (acc + lane.width / 2.0);
-            acc += lane.width;
+            if (lane.id == lane_id) return base_offset - (acc + width_at_query(lane) / 2.0);
+            acc += width_at_query(lane);
         }
     }
-    return lanes.lane_offset;
+    return base_offset;
 }
 
 double lane_width_of(const model::RoadSegment& road, const bool at_start, const int lane_id) {
@@ -502,15 +589,41 @@ struct LaneRunAlignment {
     bool extra_at_start = false; // added/removed lane(s) are innermost (index 0), not outermost
 };
 
+// +1 if `dirs` is decisively left-family (left/slight_left/sharp_left, and no right-family value
+// too), -1 if decisively right-family (mirrored), 0 if neutral/empty/contradictory.
+// A lane that still permits "through" is not an exclusively-dedicated turn lane -- just a through
+// lane that also happens to allow a turn -- so it must not count as decisive evidence that it's a
+// newly-added/removed lane on its own (real-world example: turn:lanes "through;left" alongside a
+// plain exclusive "right" lane -- the "through;left" one is still a through lane, the "right" one is
+// the actual dedicated addition).
+int turn_direction_side_hint(const std::vector<std::string>& dirs) {
+    bool has_left = false, has_right = false, has_through = false;
+    for (const auto& d : dirs) {
+        if (d == "left" || d == "slight_left" || d == "sharp_left") has_left = true;
+        if (d == "right" || d == "slight_right" || d == "sharp_right") has_right = true;
+        if (d == "through") has_through = true;
+    }
+    if (has_through) return 0;
+    if (has_left && !has_right) return 1;
+    if (has_right && !has_left) return -1;
+    return 0;
+}
+
 // Aligns one type-homogeneous run when its lane count differs between two laneSections (a real
 // lane split or merge, not just a junction/road boundary where counts should normally match). The
 // surplus lane(s) can sit at either edge of the longer run -- a new dedicated left-turn lane is
-// innermost (index 0 of .right in RHT, closest to the road's own center), a new dedicated
-// right-turn lane is outermost -- so which edge is decided by comparing turn_directions on the
-// lanes present in *both* runs under each hypothesis and keeping whichever alignment preserves
-// more of them, rather than assuming new lanes always append at the end.
+// innermost (index 0 of .right in RHT, closest to the road's own center; mirrored to outermost in
+// left-hand traffic, where a left turn is instead executed from the curb-side lane) -- so which
+// edge is decided primarily by the surplus lane(s)' own turn_directions tag, when it decisively
+// indicates one side or the other, falling back to comparing turn_directions on the lanes present
+// in *both* runs under each hypothesis and keeping whichever alignment preserves more of them (the
+// direct signal is checked first because real OSM data frequently tags only the lane(s) that
+// actually have a turn restriction, leaving ordinary through lanes on both sides untagged -- the
+// paired-lane comparison alone then ties on every hypothesis and silently falls through to
+// "assume it's at the end", even when the added/removed lane's own tag says otherwise).
 LaneRunAlignment align_lane_run(const std::vector<model::LaneSpec>& prev_side, const std::vector<std::size_t>& prev_idxs,
-                                 const std::vector<model::LaneSpec>& next_side, const std::vector<std::size_t>& next_idxs) {
+                                 const std::vector<model::LaneSpec>& next_side, const std::vector<std::size_t>& next_idxs,
+                                 const bool left_hand_traffic) {
     LaneRunAlignment result;
     const std::size_t prev_n = prev_idxs.size();
     const std::size_t next_n = next_idxs.size();
@@ -518,17 +631,45 @@ LaneRunAlignment align_lane_run(const std::vector<model::LaneSpec>& prev_side, c
     const std::size_t diff = prev_n > next_n ? prev_n - next_n : next_n - prev_n;
 
     bool extra_at_start = false;
-    if (diff > 0 && n > 0) {
-        const std::size_t prev_extra = prev_n > next_n ? diff : 0;
-        const std::size_t next_extra = next_n > prev_n ? diff : 0;
-        auto score = [&](const std::size_t prev_off, const std::size_t next_off) {
-            int matches = 0;
-            for (std::size_t i = 0; i < n; ++i) {
-                if (prev_side[prev_idxs[prev_off + i]].turn_directions == next_side[next_idxs[next_off + i]].turn_directions) ++matches;
+    if (diff > 0) {
+        const auto& longer_side = prev_n > next_n ? prev_side : next_side;
+        const auto& longer_idxs = prev_n > next_n ? prev_idxs : next_idxs;
+        // Aggregate side_hint across a candidate surplus slice; 0 (neutral) unless every non-neutral
+        // lane in it agrees, so a mixed/contradictory slice never masquerades as decisive.
+        auto slice_hint = [&](const std::size_t offset) {
+            int left_votes = 0, right_votes = 0;
+            for (std::size_t i = 0; i < diff; ++i) {
+                const int h = turn_direction_side_hint(longer_side[longer_idxs[offset + i]].turn_directions);
+                if (h > 0) ++left_votes;
+                if (h < 0) ++right_votes;
             }
-            return matches;
+            if (left_votes > 0 && right_votes == 0) return 1;
+            if (right_votes > 0 && left_votes == 0) return -1;
+            return 0;
         };
-        extra_at_start = score(prev_extra, next_extra) > score(0, 0);
+        // Does a lane with this hint belong at the innermost (start) position under the given
+        // traffic convention? Left-family wants innermost in RHT (crosses toward center), outermost
+        // in LHT (executed from the curb side); right-family is the mirror.
+        auto wants_start = [&](const int hint) { return left_hand_traffic ? (hint < 0) : (hint > 0); };
+
+        const int start_hint = slice_hint(0);        // candidate slice if the surplus were at the start
+        const int end_hint = slice_hint(n);           // candidate slice if the surplus were at the end
+        if (start_hint != 0 && wants_start(start_hint)) {
+            extra_at_start = true;
+        } else if (end_hint != 0 && !wants_start(end_hint)) {
+            extra_at_start = false;
+        } else if (n > 0) {
+            const std::size_t prev_extra = prev_n > next_n ? diff : 0;
+            const std::size_t next_extra = next_n > prev_n ? diff : 0;
+            auto score = [&](const std::size_t prev_off, const std::size_t next_off) {
+                int matches = 0;
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (prev_side[prev_idxs[prev_off + i]].turn_directions == next_side[next_idxs[next_off + i]].turn_directions) ++matches;
+                }
+                return matches;
+            };
+            extra_at_start = score(prev_extra, next_extra) > score(0, 0);
+        }
     }
     result.extra_at_start = extra_at_start;
 
@@ -563,7 +704,8 @@ struct SidePreview {
     bool extra_at_start = false; // the added/removed lane(s) are innermost, not outermost
 };
 
-SidePreview lane_side_preview(const std::vector<model::LaneSpec>& prev_side, const std::vector<model::LaneSpec>& next_side) {
+SidePreview lane_side_preview(const std::vector<model::LaneSpec>& prev_side, const std::vector<model::LaneSpec>& next_side,
+                               const bool left_hand_traffic) {
     SidePreview result;
     std::map<std::string, std::vector<std::size_t>> prev_by_type, next_by_type;
     for (std::size_t i = 0; i < prev_side.size(); ++i) prev_by_type[prev_side[i].type].push_back(i);
@@ -571,7 +713,7 @@ SidePreview lane_side_preview(const std::vector<model::LaneSpec>& prev_side, con
     for (auto& [type, prev_idxs] : prev_by_type) {
         const auto it = next_by_type.find(type);
         if (it == next_by_type.end()) continue;
-        const auto align = align_lane_run(prev_side, prev_idxs, next_side, it->second);
+        const auto align = align_lane_run(prev_side, prev_idxs, next_side, it->second, left_hand_traffic);
         result.added.insert(result.added.end(), align.added.begin(), align.added.end());
         result.removed.insert(result.removed.end(), align.removed.begin(), align.removed.end());
         if (!align.added.empty() || !align.removed.empty()) result.extra_at_start = align.extra_at_start;
@@ -592,7 +734,8 @@ struct SideTransition {
     std::vector<std::size_t> removed; // prev_side indices with no successor (a lane merge)
 };
 
-SideTransition link_lane_side_with_transition(std::vector<model::LaneSpec>& prev_side, std::vector<model::LaneSpec>& next_side) {
+SideTransition link_lane_side_with_transition(std::vector<model::LaneSpec>& prev_side, std::vector<model::LaneSpec>& next_side,
+                                                const bool left_hand_traffic) {
     SideTransition result;
     std::map<std::string, std::vector<std::size_t>> prev_by_type, next_by_type;
     for (std::size_t i = 0; i < prev_side.size(); ++i) prev_by_type[prev_side[i].type].push_back(i);
@@ -600,7 +743,7 @@ SideTransition link_lane_side_with_transition(std::vector<model::LaneSpec>& prev
     for (auto& [type, prev_idxs] : prev_by_type) {
         const auto it = next_by_type.find(type);
         if (it == next_by_type.end()) continue;
-        const auto align = align_lane_run(prev_side, prev_idxs, next_side, it->second);
+        const auto align = align_lane_run(prev_side, prev_idxs, next_side, it->second, left_hand_traffic);
         apply_lane_run_alignment(prev_side, next_side, align);
         result.added.insert(result.added.end(), align.added.begin(), align.added.end());
         result.removed.insert(result.removed.end(), align.removed.begin(), align.removed.end());
@@ -608,15 +751,15 @@ SideTransition link_lane_side_with_transition(std::vector<model::LaneSpec>& prev
     return result;
 }
 
-void link_lane_side(std::vector<model::LaneSpec>& prev_side, std::vector<model::LaneSpec>& next_side) {
-    link_lane_side_with_transition(prev_side, next_side);
+void link_lane_side(std::vector<model::LaneSpec>& prev_side, std::vector<model::LaneSpec>& next_side, const bool left_hand_traffic) {
+    link_lane_side_with_transition(prev_side, next_side, left_hand_traffic);
 }
 
 // Links matching lanes across an internal laneSection boundary within a merged road (prev's end
 // is next's start, by construction of the merge chain).
-void link_lane_sections(model::LanePlan& prev, model::LanePlan& next) {
-    link_lane_side(prev.left, next.left);
-    link_lane_side(prev.right, next.right);
+void link_lane_sections(model::LanePlan& prev, model::LanePlan& next, const bool left_hand_traffic) {
+    link_lane_side(prev.left, next.left, left_hand_traffic);
+    link_lane_side(prev.right, next.right, left_hand_traffic);
 }
 
 // Links matching lanes across a plain (non-junction) road-to-road boundary -- two separate
@@ -645,11 +788,11 @@ void link_plain_road_lanes(model::RoadSegment& road_a, const bool a_at_start,
     auto& bwd_b = left_hand_traffic ? lanes_b.right : lanes_b.left;
 
     if (a_at_start != b_at_start) {
-        if (!a_at_start) { link_lane_side(fwd_a, fwd_b); link_lane_side(bwd_b, bwd_a); }
-        else { link_lane_side(fwd_b, fwd_a); link_lane_side(bwd_a, bwd_b); }
+        if (!a_at_start) { link_lane_side(fwd_a, fwd_b, left_hand_traffic); link_lane_side(bwd_b, bwd_a, left_hand_traffic); }
+        else { link_lane_side(fwd_b, fwd_a, left_hand_traffic); link_lane_side(bwd_a, bwd_b, left_hand_traffic); }
     } else {
-        if (!a_at_start) { link_lane_side(fwd_a, bwd_b); link_lane_side(fwd_b, bwd_a); }
-        else { link_lane_side(bwd_a, fwd_b); link_lane_side(bwd_b, fwd_a); }
+        if (!a_at_start) { link_lane_side(fwd_a, bwd_b, left_hand_traffic); link_lane_side(fwd_b, bwd_a, left_hand_traffic); }
+        else { link_lane_side(bwd_a, fwd_b, left_hand_traffic); link_lane_side(bwd_b, fwd_a, left_hand_traffic); }
     }
 }
 
@@ -711,7 +854,8 @@ struct BridgeLane {
 // first-seen order (prev's own order, then any type appearing only in next) rather than sorted,
 // so physical inner-to-outer ordering is preserved regardless of type name.
 std::vector<BridgeLane> build_bridge_side(const std::vector<model::LaneSpec>& prev_side,
-                                            const std::vector<model::LaneSpec>& next_side) {
+                                            const std::vector<model::LaneSpec>& next_side,
+                                            const bool left_hand_traffic) {
     std::vector<std::string> type_order;
     auto note_type = [&](const std::string& t) {
         if (std::find(type_order.begin(), type_order.end(), t) == type_order.end()) type_order.push_back(t);
@@ -728,7 +872,7 @@ std::vector<BridgeLane> build_bridge_side(const std::vector<model::LaneSpec>& pr
     for (const auto& type : type_order) {
         const auto& prev_idxs = prev_by_type.count(type) ? prev_by_type[type] : kEmpty;
         const auto& next_idxs = next_by_type.count(type) ? next_by_type[type] : kEmpty;
-        const auto align = align_lane_run(prev_side, prev_idxs, next_side, next_idxs);
+        const auto align = align_lane_run(prev_side, prev_idxs, next_side, next_idxs, left_hand_traffic);
 
         std::vector<BridgeLane> paired_run, extra_run;
         for (const auto& [pi, ni] : align.paired) {
@@ -794,7 +938,7 @@ std::optional<LaneCountBridgePlan> plan_lane_count_bridge(const model::RoadSegme
 
     bool any_change = false;
     for (const auto& d : dirs) {
-        const auto preview = lane_side_preview(*d.prev, *d.next);
+        const auto preview = lane_side_preview(*d.prev, *d.next, lht);
         if (!preview.added.empty() || !preview.removed.empty()) any_change = true;
     }
     if (!any_change) return std::nullopt; // plain width/type change only: today's direct link is already correct
@@ -816,14 +960,21 @@ std::optional<LaneCountBridgePlan> plan_lane_count_bridge(const model::RoadSegme
     const double abs_delta = std::min(std::abs(signed_delta), geo::kPi - 0.001);
     if (abs_delta > geo::deg_to_rad(160.0)) return std::nullopt; // near-reversal: ill-conditioned, same guard as junction connectors
 
-    // Capped the same way fuse_chain caps its own taper length: at most the taper-length option,
-    // and at most 40% of the immediately adjacent OSM sub-segment so a trim never eats into an
-    // earlier real bend. Both roads get the *same* trim -- a fillet inscribed at a single shared
-    // vertex necessarily has equal tangent lengths on both rays, so this is a geometric requirement
-    // here, not just a simplification.
+    // Adaptive taper length -- upstream's own speed governs (that's the road the vehicle is
+    // actually traveling as it executes the shift), falling back to downstream's when upstream
+    // isn't tagged. Capped the same way fuse_chain caps its own taper length: at most the (adaptive
+    // or flat-fallback) taper length, and at most 40% of the immediately adjacent OSM sub-segment so
+    // a trim never eats into an earlier real bend. Both roads get the *same* trim -- a fillet
+    // inscribed at a single shared vertex necessarily has equal tangent lengths on both rays, so
+    // this is a geometric requirement here, not just a simplification.
+    const auto upstream_speed = infer::parse_maxspeed(tag_value_or(tags_at_end(upstream_road, false), "maxspeed", ""));
+    const auto downstream_speed = infer::parse_maxspeed(tag_value_or(tags_at_end(downstream_road, true), "maxspeed", ""));
+    const double taper_length = infer::adaptive_taper_length(
+        options.default_lane_width, upstream_speed ? upstream_speed : downstream_speed,
+        options.lane_taper_length, options);
     const double budget_a = 0.4 * segment_length_at_end(road_a, a_at_start);
     const double budget_b = 0.4 * segment_length_at_end(road_b, b_at_start);
-    const double trim = std::min({options.lane_taper_length, budget_a, budget_b});
+    const double trim = std::min({taper_length, budget_a, budget_b});
     if (trim < 0.5) return std::nullopt; // not enough room to bother
 
     const double tan_half = std::tan(abs_delta / 2.0);
@@ -865,8 +1016,8 @@ std::optional<LaneCountBridgePlan> plan_lane_count_bridge(const model::RoadSegme
     g.kind = kind;
     bridge.explicit_geometry.push_back(g);
 
-    const auto fwd_bridge_lanes = build_bridge_side(*dirs[0].prev, *dirs[0].next);
-    const auto bwd_bridge_lanes = build_bridge_side(*dirs[1].prev, *dirs[1].next);
+    const auto fwd_bridge_lanes = build_bridge_side(*dirs[0].prev, *dirs[0].next, lht);
+    const auto bwd_bridge_lanes = build_bridge_side(*dirs[1].prev, *dirs[1].next, lht);
 
     auto assign_side = [&](std::vector<model::LaneSpec>& out_side, const std::vector<BridgeLane>& bridge_lanes, const bool left_side) {
         int counter = 1;
@@ -1036,8 +1187,8 @@ model::RoadSegment fuse_chain(const std::vector<ChainSlot>& chain, const std::ve
                 // part_lanes: align_lane_run is read-only, and the real linking happens below via
                 // whichever section ends up adjacent to `part_lanes` (which may be a freshly
                 // inserted taper section rather than `prior_lanes` itself).
-                const auto left_preview = lane_side_preview(prior_lanes.left, part_lanes.left);
-                const auto right_preview = lane_side_preview(prior_lanes.right, part_lanes.right);
+                const auto left_preview = lane_side_preview(prior_lanes.left, part_lanes.left, options.left_hand_traffic);
+                const auto right_preview = lane_side_preview(prior_lanes.right, part_lanes.right, options.left_hand_traffic);
                 const auto& added_left = left_preview.added;
                 const auto& removed_left = left_preview.removed;
                 const auto& added_right = right_preview.added;
@@ -1054,7 +1205,7 @@ model::RoadSegment fuse_chain(const std::vector<ChainSlot>& chain, const std::ve
                     section.tags = part_tags;
                     section.source_way_id = part.source_way_id;
                     section.segment_index = part.segment_index;
-                    link_lane_sections(prior_lanes, section.lanes);
+                    link_lane_sections(prior_lanes, section.lanes, options.left_hand_traffic);
                     merged.extra_lane_sections.push_back(std::move(section));
                 } else {
                     // A real lane split (has_added) or merge (has_removed): the appearing/
@@ -1070,8 +1221,24 @@ model::RoadSegment fuse_chain(const std::vector<ChainSlot>& chain, const std::ve
                     // positions are `lane_offset - accumulated_width`, so growing the innermost lane
                     // must grow lane_offset to compensate), -width for a .left lane (mirrored sign,
                     // since .left positions are `lane_offset + accumulated_width`).
-                    const double taper_out_len = has_removed ? std::min(options.lane_taper_length, prev_part_length * 0.4) : 0.0;
-                    const double taper_in_len = has_added ? std::min(options.lane_taper_length, geo::polyline_length(part_points) * 0.4) : 0.0;
+                    // Adaptive taper length: `before_tags` is the cross-section immediately prior
+                    // to this boundary (same tags source used for the taper-out section's own
+                    // .tags a few lines below), `part_tags` the one immediately after. taper_out
+                    // sits within the *prior* cross-section (governed primarily by its own speed,
+                    // falling back to the next section's), taper_in within the *new* one (mirrored).
+                    const Tags& before_tags = merged.extra_lane_sections.empty() ? merged.tags : merged.extra_lane_sections.back().tags;
+                    const auto before_speed = infer::parse_maxspeed(tag_value_or(before_tags, "maxspeed", ""));
+                    const auto after_speed = infer::parse_maxspeed(tag_value_or(part_tags, "maxspeed", ""));
+                    const double taper_out_len = has_removed
+                        ? std::min(infer::adaptive_taper_length(options.default_lane_width, before_speed ? before_speed : after_speed,
+                                                                 options.lane_taper_length, options),
+                                   prev_part_length * 0.4)
+                        : 0.0;
+                    const double taper_in_len = has_added
+                        ? std::min(infer::adaptive_taper_length(options.default_lane_width, after_speed ? after_speed : before_speed,
+                                                                 options.lane_taper_length, options),
+                                   geo::polyline_length(part_points) * 0.4)
+                        : 0.0;
 
                     // Tracks the lane_offset value at the point the *next* section should pick up
                     // from -- not simply "whatever LanePlan::lane_offset says", since that field is
@@ -1095,10 +1262,10 @@ model::RoadSegment fuse_chain(const std::vector<ChainSlot>& chain, const std::ve
 
                         model::LaneSection section;
                         section.s_offset = part_start_s - taper_out_len;
-                        section.tags = merged.extra_lane_sections.empty() ? merged.tags : merged.extra_lane_sections.back().tags;
+                        section.tags = before_tags;
                         section.source_way_id = merged.extra_lane_sections.empty() ? merged.source_way_id : merged.extra_lane_sections.back().source_way_id;
                         section.segment_index = merged.extra_lane_sections.empty() ? merged.segment_index : merged.extra_lane_sections.back().segment_index;
-                        link_lane_sections(prior_lanes, taper_out); // trivial: same lane ids on both sides
+                        link_lane_sections(prior_lanes, taper_out, options.left_hand_traffic); // trivial: same lane ids on both sides
                         section.lanes = std::move(taper_out);
                         merged.extra_lane_sections.push_back(std::move(section));
                     }
@@ -1124,7 +1291,7 @@ model::RoadSegment fuse_chain(const std::vector<ChainSlot>& chain, const std::ve
                         real_next.lane_offset_slope = taper_in_len > 1e-6 ? offset_delta / taper_in_len : 0.0;
                         handoff_offset += offset_delta;
                     }
-                    link_lane_sections(immediate_prior, real_next);
+                    link_lane_sections(immediate_prior, real_next, options.left_hand_traffic);
 
                     model::LaneSection real_section;
                     real_section.s_offset = part_start_s;
@@ -1149,7 +1316,7 @@ model::RoadSegment fuse_chain(const std::vector<ChainSlot>& chain, const std::ve
                         section.tags = part_tags;
                         section.source_way_id = part.source_way_id;
                         section.segment_index = part.segment_index;
-                        link_lane_sections(merged.extra_lane_sections.back().lanes, section.lanes); // trivial: same lane ids
+                        link_lane_sections(merged.extra_lane_sections.back().lanes, section.lanes, options.left_hand_traffic); // trivial: same lane ids
                         merged.extra_lane_sections.push_back(std::move(section));
                     }
                 }
@@ -1200,6 +1367,7 @@ private:
     void build_junction_connectors();
     void place_signals();
     void fit_curves();
+    void fix_link_continuity();
     void apply_tracked_trim(std::size_t road_index, bool at_start, double applied);
 
     std::unordered_map<std::int64_t, std::vector<model::EndpointRef>, EndpointKeyHash> build_endpoint_map(
@@ -1241,6 +1409,7 @@ model::MapModel ModelBuilder::build() {
     build_junction_connectors();
     place_signals();
     if (options_.curve_fit) fit_curves();
+    if (options_.curve_fit && options_.fix_link_continuity) fix_link_continuity();
 
     if (model_.roads.empty()) {
         model_.north = model_.south = model_.east = model_.west = 0.0;
@@ -1703,11 +1872,43 @@ void ModelBuilder::build_junction_connectors() {
             endpoints.insert(endpoints.end(), it->second.begin(), it->second.end());
         }
         const std::string junction_id = "j_" + std::to_string(canonical);
+        constexpr double kClassificationLookahead = 15.0;
+
         for (const auto& incoming : endpoints) {
             const auto& in_road = model_.roads[incoming.road_index];
             const auto incoming_lanes = incoming_lane_ids(in_road, incoming.at_start, options_);
             if (incoming_lanes.empty()) continue;
             const auto dir_in = direction_into_junction(in_road, incoming.at_start);
+            const auto classification_dir_in = classification_direction_into_junction(in_road, incoming.at_start, kClassificationLookahead);
+
+            // Every movement bucket (and its own signed delta, for lane_allows_movement's "reverse"
+            // handling) actually available at this junction from this incoming road, gathered
+            // before filtering any lane against them, so an incoming lane whose own tag doesn't
+            // match any of them (see lane_fallback_bucket) can still fall back to whichever is
+            // closest instead of ending up with zero connections.
+            std::vector<std::pair<std::string, double>> available_movements;
+            for (const auto& outgoing : endpoints) {
+                if (incoming.road_index == outgoing.road_index) continue;
+                const auto& out_road = model_.roads[outgoing.road_index];
+                if (outgoing_lane_ids(out_road, outgoing.at_start, options_).empty()) continue;
+                const auto classification_dir_out = classification_direction_away_from_junction(out_road, outgoing.at_start, kClassificationLookahead);
+                const double delta = std::atan2(geo::cross(classification_dir_in, classification_dir_out),
+                                                 geo::dot(classification_dir_in, classification_dir_out));
+                available_movements.emplace_back(turn_bucket_for_delta(delta), delta);
+            }
+            std::vector<std::string> available_buckets;
+            for (const auto& [bucket, delta] : available_movements) available_buckets.push_back(bucket);
+            std::unordered_map<int, std::string> fallback_bucket_for_lane;
+            for (const auto lane_id : incoming_lanes) {
+                bool matched_any = false;
+                for (const auto& [bucket, delta] : available_movements) {
+                    if (lane_allows_movement(in_road, incoming.at_start, lane_id, bucket, delta)) { matched_any = true; break; }
+                }
+                if (matched_any) continue;
+                if (const auto fallback = lane_fallback_bucket(in_road, incoming.at_start, lane_id, available_buckets)) {
+                    fallback_bucket_for_lane[lane_id] = *fallback;
+                }
+            }
 
             for (const auto& outgoing : endpoints) {
                 if (incoming.road_index == outgoing.road_index) continue;
@@ -1727,15 +1928,16 @@ void ModelBuilder::build_junction_connectors() {
                 // below) still uses the immediate dir_in/dir_out -- it must, for exact position/
                 // heading continuity at the seam -- only the bucket used for turn:lanes filtering
                 // benefits from looking further ahead.
-                constexpr double kClassificationLookahead = 15.0;
-                const auto classification_dir_in = classification_direction_into_junction(in_road, incoming.at_start, kClassificationLookahead);
                 const auto classification_dir_out = classification_direction_away_from_junction(out_road, outgoing.at_start, kClassificationLookahead);
                 const double classification_delta = std::atan2(geo::cross(classification_dir_in, classification_dir_out),
                                                                  geo::dot(classification_dir_in, classification_dir_out));
                 const double tan_half = std::tan(abs_delta / 2.0);
-                const double radius_nominal = std::max(
-                    infer::turn_radius_for_highway(tag_value_or(tags_at_end(in_road, incoming.at_start), "highway", "road"), options_),
-                    infer::turn_radius_for_highway(tag_value_or(tags_at_end(out_road, outgoing.at_start), "highway", "road"), options_));
+                const double radius_nominal = infer::adaptive_turn_radius(
+                    tag_value_or(tags_at_end(in_road, incoming.at_start), "highway", "road"),
+                    infer::parse_maxspeed(tag_value_or(tags_at_end(in_road, incoming.at_start), "maxspeed", "")),
+                    tag_value_or(tags_at_end(out_road, outgoing.at_start), "highway", "road"),
+                    infer::parse_maxspeed(tag_value_or(tags_at_end(out_road, outgoing.at_start), "maxspeed", "")),
+                    abs_delta, options_);
 
                 const std::size_t in_key = endpoint_key(incoming.road_index, incoming.at_start);
                 const std::size_t out_key = endpoint_key(outgoing.road_index, outgoing.at_start);
@@ -1758,7 +1960,15 @@ void ModelBuilder::build_junction_connectors() {
                 // matches the outgoing count exactly and a clean 1:1 pairing exists.
                 std::size_t allowed_index = 0;
                 for (std::size_t i = 0; i < incoming_lanes.size(); ++i) {
-                    if (!lane_allows_movement(in_road, incoming.at_start, incoming_lanes[i], movement_bucket, classification_delta)) continue;
+                    const bool allowed = lane_allows_movement(in_road, incoming.at_start, incoming_lanes[i], movement_bucket, classification_delta);
+                    // A lane that matched nothing at all across this whole junction falls back to
+                    // whichever available movement is closest to its own tag (see
+                    // fallback_bucket_for_lane above) rather than being left with zero connections
+                    // -- only take that fallback exactly here, at the one movement it was actually
+                    // assigned to, not at every movement it happens to be nearest to.
+                    const auto fallback_it = fallback_bucket_for_lane.find(incoming_lanes[i]);
+                    const bool is_fallback = fallback_it != fallback_bucket_for_lane.end() && fallback_it->second == movement_bucket;
+                    if (!allowed && !is_fallback) continue;
                     const std::size_t k = std::min(allowed_index, outgoing_lanes.size() - 1);
                     ++allowed_index;
                     PendingConnector pc;
@@ -1945,51 +2155,68 @@ void ModelBuilder::build_junction_connectors() {
         // but not necessarily as much as this one originally wanted) can actually support,
         // rescuing it into a real curve instead of a stale direct link that no longer reaches its
         // target because some other movement at the same end forced a trim it didn't account for.
+        // Re-derived fresh here (not pc.a_in/a_out shifted by trim_in/trim_out along dir_in/dir_out)
+        // because a lane's own lateral offset at a road's end is not necessarily constant over the
+        // trimmed distance: pc.a_in was computed in pass 1, before this movement's road end was
+        // actually trimmed, using whatever laneSection was "current" at that (pre-trim, longer)
+        // length -- if the trim eats into (or past) a lane-count-change taper, the lane's true
+        // lateral position at the *actual* (post-trim) endpoint can differ from a straight-line
+        // shift of the pre-trim anchor. in_road/out_road above are refetched after trims are
+        // applied, so lane_world_point here reads the final, already-trimmed lane structure.
+        const geo::Vec2 phys_in = lane_world_point(in_road, pc.in_at_start, pc.incoming_lane_id);
+        const geo::Vec2 phys_out = lane_world_point(out_road, pc.out_at_start, pc.outgoing_lane_id);
+
         double radius = pc.radius;
-        double b_in = pc.b_in;
-        double b_out = pc.b_out;
+        double run_in = 0.0, run_out = 0.0, arc_length = 0.0;
         // Whether `radius` above actually corresponds to a fillet that reaches phys_out: false
         // either when pass 1 never solved one at all (radius <= 0, the near-180/laterally-offset
-        // case), or when the refit below finds that not even a small curve fits the final trim
-        // (radius_cap_in/out come out non-positive, e.g. a movement whose own geometry was so
-        // awkward that s_in/s_out are large negative numbers no realistic trim could offset) --
-        // in either case run_in/arc_length/run_out further down must not be trusted, since they'd
-        // be built from a radius that no longer matches the b_in/b_out used to derive phys_in/out.
+        // case), or when the refit below finds that not even a small curve fits phys_in/phys_out
+        // as they actually ended up (e.g. a movement whose own geometry was so awkward no realistic
+        // radius reaches both) -- in either case run_in/arc_length/run_out must not be trusted.
         bool fitted = radius > 0.0;
         if (fitted) {
             const double abs_delta = std::min(std::abs(pc.signed_delta), geo::kPi - 0.001);
             const double tan_half = std::tan(abs_delta / 2.0);
             if (tan_half > 1e-9) {
-                const double s_in = radius * tan_half - b_in;
-                const double s_out = b_out - radius * tan_half;
-                const double radius_nominal = std::max(
-                    infer::turn_radius_for_highway(tag_value_or(tags_at_end(in_road, pc.in_at_start), "highway", "road"), options_),
-                    infer::turn_radius_for_highway(tag_value_or(tags_at_end(out_road, pc.out_at_start), "highway", "road"), options_));
-                const double radius_cap_in = (trim_in + s_in) / tan_half;
-                const double radius_cap_out = (trim_out - s_out) / tan_half;
-                const double refit = std::min({radius_nominal, radius_cap_in, radius_cap_out});
-                // Floored well below pass 1's "no unrealistic kinks" 3.0m floor: unlike pass 1
-                // (which can fall back to a direct link when nothing reasonable fits), this is the
-                // last chance to produce a curve at all, so a tight-but-continuous one beats a
-                // discontinuous one -- but only down to a point; below that, forcing the floor
-                // would use a radius inconsistent with the b_in/b_out actually available; a direct
-                // bridge is more correct.
-                if (refit >= 1.0) {
-                    radius = refit;
-                    b_in = radius * tan_half - s_in;
-                    b_out = radius * tan_half + s_out;
+                // Re-solved from phys_in/phys_out directly (not algebraically inverted from pass
+                // 1's pc.radius/b_in/b_out, which were only ever valid relative to the pre-trim
+                // pc.a_in/a_out) -- s_in2/s_out2 are the signed distances from phys_in/phys_out to
+                // the fillet's own point-of-intersection, the same role pass 1's s_in/s_out played
+                // relative to a_in/a_out, just measured from the final, already-trimmed anchors, so
+                // there is no separate "trim still available" term to add: phys_in/phys_out are the
+                // whole budget now.
+                const auto inter = geo::line_intersect_params(phys_in, pc.dir_in, phys_out, pc.dir_out);
+                if (inter) {
+                    const auto [s_in2, s_out2] = *inter;
+                    const double radius_nominal = infer::adaptive_turn_radius(
+                        tag_value_or(tags_at_end(in_road, pc.in_at_start), "highway", "road"),
+                        infer::parse_maxspeed(tag_value_or(tags_at_end(in_road, pc.in_at_start), "maxspeed", "")),
+                        tag_value_or(tags_at_end(out_road, pc.out_at_start), "highway", "road"),
+                        infer::parse_maxspeed(tag_value_or(tags_at_end(out_road, pc.out_at_start), "maxspeed", "")),
+                        abs_delta, options_);
+                    const double radius_cap_in = s_in2 / tan_half;
+                    const double radius_cap_out = -s_out2 / tan_half;
+                    const double refit = std::min({radius_nominal, radius_cap_in, radius_cap_out});
+                    // Floored well below pass 1's "no unrealistic kinks" 3.0m floor: unlike pass 1
+                    // (which can fall back to a direct link when nothing reasonable fits), this is
+                    // the last chance to produce a curve at all, so a tight-but-continuous one
+                    // beats a discontinuous one -- but only down to a point; below that, forcing
+                    // the floor would use a radius inconsistent with phys_in/phys_out as they
+                    // actually are; a direct bridge is more correct.
+                    if (refit >= 1.0) {
+                        radius = refit;
+                        const double tangent_length = radius * tan_half;
+                        run_in = std::max(0.0, s_in2 - tangent_length);
+                        run_out = std::max(0.0, -s_out2 - tangent_length);
+                        arc_length = radius * abs_delta;
+                    } else {
+                        fitted = false;
+                    }
                 } else {
-                    fitted = false;
+                    fitted = false; // dir_in/dir_out parallel -- shouldn't happen given radius > 0 above, but guard anyway
                 }
             }
         }
-
-        const double run_in = std::max(0.0, trim_in - b_in);
-        const double run_out = std::max(0.0, trim_out - b_out);
-        const double arc_length = radius * std::abs(pc.signed_delta);
-
-        const geo::Vec2 phys_in = pc.a_in - pc.dir_in * trim_in;
-        const geo::Vec2 phys_out = pc.a_out + pc.dir_out * trim_out;
 
         std::vector<model::GeomPrimitive> geoms;
         // Without a fitted radius (see `fitted` above), the run_in-then-run_out construction below
@@ -2002,27 +2229,19 @@ void ModelBuilder::build_junction_connectors() {
         // this produces the exact same result as the geoms.empty() stub further below would anyway.
         const bool needs_direct_bridge = !fitted;
         if (needs_direct_bridge) {
-            const double gap = geo::length(phys_out - phys_in);
-            const double bridge_hdg = gap > 1e-6 ? geo::heading(phys_in, phys_out) : std::atan2(pc.dir_in.y, pc.dir_in.x);
-
-            // The chord direction between phys_in and phys_out can, for a large lateral-vs-
-            // longitudinal gap ratio, end up nowhere near either the incoming or outgoing lane's
-            // own heading -- not a plausible through/slight-turn shape, just an artifact of an
-            // extreme, near-reversed pairing. hermite_bezier_segment below matches both endpoint
-            // headings exactly regardless (unlike a single straight line, which can only assert
-            // one direction), but a Bezier built from two wildly diverging tangents over a short
-            // gap can loop or double back on itself rather than reading as a real road shape, so
-            // this sanity check still gates whether to attempt a bridge at all, not (as it used to)
-            // whether the single heading it could offer was close enough to both ends.
-            auto angle_diff = [](const double a, const double b) {
-                double d = std::fmod(a - b + geo::kPi, 2.0 * geo::kPi);
-                if (d < 0.0) d += 2.0 * geo::kPi;
-                return std::abs(d - geo::kPi);
-            };
-            const double in_hdg = std::atan2(pc.dir_in.y, pc.dir_in.x);
-            const double out_hdg = std::atan2(pc.dir_out.y, pc.dir_out.x);
-            if (angle_diff(bridge_hdg, in_hdg) > geo::deg_to_rad(45.0) ||
-                angle_diff(bridge_hdg, out_hdg) > geo::deg_to_rad(45.0)) {
+            // Whether a bridge is even worth attempting is gated on how far dir_in/dir_out
+            // themselves diverge (pc.signed_delta) -- the two tangents a Hermite-Bezier is built
+            // from -- not on the straight chord between phys_in/phys_out. The chord is a poor proxy
+            // for curve quality: a short gap combined with even a modest lateral offset between the
+            // lanes (common at a real junction) can point the chord tens of degrees away from a
+            // perfectly reasonable near-through movement's own tangents, even though the resulting
+            // Bezier (which matches both tangents exactly by construction, unlike a single straight
+            // line) would be a gentle, well-behaved curve. The tangent-to-tangent divergence is the
+            // quantity that actually governs whether a cubic Hermite-Bezier can loop back on itself,
+            // and 160 deg is the same threshold pass 1 already uses for "this is a genuine,
+            // essentially-irreducible near-reversal" -- reused here rather than a second, different
+            // cutoff for the same judgment.
+            if (std::abs(pc.signed_delta) > geo::deg_to_rad(160.0)) {
                 ++direct_fallback_count_;
                 c.incoming_road = in_road_id;
                 c.connecting_road = out_road_id;
@@ -2233,6 +2452,85 @@ void ModelBuilder::fit_curves() {
                 model_.west = std::min(model_.west, p.x);
             }
         }
+    }
+}
+
+// fit_curves() fits each road's curve from that road's own points in isolation, so its own
+// start/end tangent only ever sees its own immediate first/last micro-segment (catmull_rom_tangents'
+// deliberate choice, matching what junction connectors/lane-count bridges already size themselves
+// against). At a plain (non-junction) road-to-road boundary -- two independently-fitted roads
+// meeting at a shared OSM node -- this can leave a real heading kink where a single, continuously-
+// fitted polyline through that node would not have one. This pass finds every such boundary and
+// replaces the two boundary-adjacent primitives with ones sharing a single tangent there, using
+// exactly the same Catmull-Rom secant formula (`normalize(next-prev)`) the rest of the curve already
+// uses for its interior points, just extended across the road-split seam. Position is untouched (the
+// two sides' physical endpoint already matches exactly by construction) and this only ever replaces
+// the shape of the one primitive at each end, never road.length/lane sections/signals.
+void ModelBuilder::fix_link_continuity() {
+    const auto endpoint_map = build_endpoint_map(model_.roads);
+    int corrected = 0;
+    double max_dhdg_deg = 0.0;
+
+    auto expand_bounds_for_primitive = [&](const model::GeomPrimitive& g) {
+        if (g.kind != model::GeomKind::ParamPoly3) return;
+        const double cos_h = std::cos(g.hdg), sin_h = std::sin(g.hdg);
+        for (const auto& local : {g.local_p1, g.local_p2, g.local_p3}) {
+            const geo::Vec2 p{g.x + local.x * cos_h - local.y * sin_h, g.y + local.x * sin_h + local.y * cos_h};
+            model_.north = std::max(model_.north, p.y);
+            model_.south = std::min(model_.south, p.y);
+            model_.east = std::max(model_.east, p.x);
+            model_.west = std::min(model_.west, p.x);
+        }
+    };
+
+    for (const auto& [node, endpoints] : endpoint_map) {
+        if (endpoints.size() != 2 || node_to_junction_id_.count(node)) continue;
+        const auto& ea = endpoints[0];
+        const auto& eb = endpoints[1];
+        if (ea.at_start == eb.at_start) continue; // not a normal one-ends/one-starts continuation
+
+        const auto& ending = ea.at_start ? eb : ea;
+        const auto& starting = ea.at_start ? ea : eb;
+        auto& road_end = model_.roads[ending.road_index];
+        auto& road_start = model_.roads[starting.road_index];
+        if (road_end.explicit_geometry.empty() || road_start.explicit_geometry.empty()) continue;
+
+        const auto prim_end = road_end.explicit_geometry.back();
+        const auto prim_start = road_start.explicit_geometry.front();
+
+        const auto node_from_end = primitive_end_point(prim_end);
+        const auto node_from_start = primitive_start_point(prim_start);
+        const double node_gap = geo::length(node_from_end - node_from_start);
+        if (node_gap > 1e-3) {
+            model_.warnings.push_back("Plain link at node " + std::to_string(node) + " between " + road_end.id +
+                " and " + road_start.id + " has a position mismatch of " + std::to_string(node_gap) +
+                "m (not corrected).");
+            continue;
+        }
+
+        const double dhdg = std::acos(std::clamp(
+            geo::dot(primitive_end_tangent(prim_end), primitive_start_tangent(prim_start)), -1.0, 1.0));
+
+        const auto prev_point = primitive_start_point(prim_end);
+        const auto next_point = primitive_end_point(prim_start);
+        const auto shared_tangent = geo::normalize(next_point - prev_point);
+
+        road_end.explicit_geometry.back() =
+            hermite_bezier_segment(prev_point, primitive_start_tangent(prim_end), node_from_end, shared_tangent);
+        road_start.explicit_geometry.front() =
+            hermite_bezier_segment(node_from_end, shared_tangent, next_point, primitive_end_tangent(prim_start));
+        expand_bounds_for_primitive(road_end.explicit_geometry.back());
+        expand_bounds_for_primitive(road_start.explicit_geometry.front());
+
+        if (dhdg > geo::deg_to_rad(0.5)) {
+            ++corrected;
+            max_dhdg_deg = std::max(max_dhdg_deg, dhdg * 180.0 / geo::kPi);
+        }
+    }
+
+    if (corrected > 0) {
+        model_.warnings.push_back("Corrected heading continuity at " + std::to_string(corrected) +
+            " plain road-to-road link(s) (max " + std::to_string(max_dhdg_deg) + " deg before fix).");
     }
 }
 

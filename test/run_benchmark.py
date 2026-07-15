@@ -120,6 +120,32 @@ def road_junction_map(xodr_text):
     return m
 
 
+def connector_radius_distribution(xodr_text):
+    """Percentiles of the turn radius (meters) actually achieved across every fitted junction
+    connector's own <arc curvature="..."> -- i.e. every real curved connector, not a direct-link
+    fallback (which has no arc at all) or a connector's straight run-in/run-out segments (curvature
+    0, excluded). Returns None if no connector road contains a real arc."""
+    radii = []
+    for road_m in re.finditer(r'<road\b([^>]*)>(.*?)</road>', xodr_text, re.S):
+        attrs = dict(re.findall(r'(\w+)="([^"]*)"', road_m.group(1)))
+        if attrs.get('junction', '-1') == '-1':
+            continue
+        for arc_m in re.finditer(r'<arc\b[^>]*\bcurvature="(-?[\d.eE+-]+)"', road_m.group(2)):
+            curvature = float(arc_m.group(1))
+            if abs(curvature) > 1e-9:
+                radii.append(1.0 / abs(curvature))
+    if not radii:
+        return None
+    radii.sort()
+
+    def pct(p):
+        idx = min(len(radii) - 1, int(round(p * (len(radii) - 1))))
+        return radii[idx]
+
+    return {'n': len(radii), 'radius_min_m': radii[0], 'radius_median_m': pct(0.5),
+            'radius_p95_m': pct(0.95), 'radius_max_m': radii[-1]}
+
+
 def xodr_stats(xodr_path):
     text = Path(xodr_path).read_text(encoding='utf-8', errors='replace')
     rj = road_junction_map(text)
@@ -212,6 +238,9 @@ def evaluate_fixture(binary, fixture, variant_name, variant_flags, outdir, repea
         return row
 
     row.update(xodr_stats(xodr_path))
+    radius_text = Path(xodr_path).read_text(encoding='utf-8', errors='replace')
+    for k, v in (connector_radius_distribution(radius_text) or {}).items():
+        row[k if k != 'n' else 'radius_n'] = v
 
     lh_args = ['--left-hand-traffic'] if left_hand else []
 
@@ -269,13 +298,13 @@ def write_markdown(rows, path):
     for variant, vrows in by_variant.items():
         lines.append(f'## Variant: `{variant}`')
         lines.append('')
-        lines.append('| fixture | tier | roads | junctions | fallback rate | '
-                      'junction mismatches | roadlink mismatches (p95 dpos/dhdg) | '
+        lines.append('| fixture | tier | roads | junctions | fallback rate | connector radius '
+                      '(min/median/p95 m) | junction mismatches | roadlink mismatches (p95 dpos/dhdg) | '
                       'turnlane violations | geomcont mismatches | wall (s) | peak RSS (MB) |')
-        lines.append('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
+        lines.append('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
         for r in vrows:
             if not r.get('convert_ok'):
-                lines.append(f"| {r['fixture']} | {r['tier']} | FAILED: {r.get('error', '')} | | | | | | | | |")
+                lines.append(f"| {r['fixture']} | {r['tier']} | FAILED: {r.get('error', '')} | | | | | | | | | |")
                 continue
             fb = r.get('fallback_rate')
             fb_s = f"{fb:.1%}" if fb is not None else 'n/a'
@@ -285,8 +314,11 @@ def write_markdown(rows, path):
             if r.get('roadlink_dpos_p95_m') is not None:
                 rl_p95 = f" (p95 {r['roadlink_dpos_p95_m']:.3f}m / {r['roadlink_dhdg_p95_deg']:.2f}deg, " \
                          f"max {r['roadlink_dpos_max_m']:.3f}m / {r['roadlink_dhdg_max_deg']:.2f}deg)"
+            radius_s = 'n/a'
+            if r.get('radius_median_m') is not None:
+                radius_s = f"{r['radius_min_m']:.1f} / {r['radius_median_m']:.1f} / {r['radius_p95_m']:.1f}"
             lines.append(
-                f"| {r['fixture']} | {r['tier']} | {r['n_roads']} | {r['n_junctions']} | {fb_s} | "
+                f"| {r['fixture']} | {r['tier']} | {r['n_roads']} | {r['n_junctions']} | {fb_s} | {radius_s} | "
                 f"{r['junction_mismatched']}/{r['junction_checked']} | "
                 f"{r['roadlink_mismatched']}/{r['roadlink_checked']}{rl_p95} | "
                 f"{r['turnlane_violations']}/{r['turnlane_checks']} | "
@@ -299,12 +331,14 @@ def write_markdown(rows, path):
         lines.append(f"{ok}/{n} fixtures passed all self-consistency checks with zero mismatches/violations "
                       f"under `{variant}`.")
         lines.append('')
-        lines.append("Note: the road-link checker's 1mm/0.001rad tolerance is calibrated for geometry the "
-                      "converter constructs itself (junction connectors); at plain road-to-road boundaries "
-                      "between two independently-digitized OSM ways it will report a 'mismatch' for any "
-                      "ordinary source-data kink, so treat the mismatch *count* here as close to meaningless "
-                      "on real-world extracts and look at the p95/max dpos/dhdg instead -- a few cm / a few "
-                      "degrees is source noise (see README limitations); values far larger than that at a "
+        lines.append("Note: with curve-fit and the link-continuity fix both on (the default), plain "
+                      "road-to-road boundaries should read ~0 heading mismatches here -- the fix pass "
+                      "rebuilds the boundary-adjacent geometry to share one tangent, removing the ordinary "
+                      "source-data kink case entirely rather than just tolerating it. A survivor is either a "
+                      "genuine lane-link topology issue (dpos/dhdg both ~0 but `symmetric=False`, unrelated "
+                      "to geometry) or was generated with `--no-curve-fit`/`--no-link-continuity-fix`/"
+                      "`--no-road-merge`, in which case a few cm / a few degrees at a plain boundary is "
+                      "still just source noise (see README limitations); values far larger than that at a "
                       "specific boundary are worth a manual look.")
         lines.append('')
 

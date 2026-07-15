@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -36,7 +37,7 @@ struct PointFeature {
 };
 
 bool is_vehicle_highway_value(const std::string& highway);
-bool is_road_way(const Tags& tags);
+bool is_road_way(const Tags& tags, const std::unordered_set<std::string>& ignore_highways);
 bool is_relevant_point_feature(const Tags& tags, std::string* kind);
 
 class CollectHandler final : public osmium::handler::Handler {
@@ -46,7 +47,7 @@ public:
     std::vector<std::string> warnings;
     geo::LocalProjector projector;
 
-    explicit CollectHandler(const Options& options) {
+    explicit CollectHandler(const Options& options) : ignore_highways_(options.ignore_highways) {
         if (options.origin_lat && options.origin_lon) {
             projector.set_origin(*options.origin_lat, *options.origin_lon);
         } else if (options.origin_lat || options.origin_lon) {
@@ -71,7 +72,7 @@ public:
 
     void way(const osmium::Way& way) {
         Tags tags = read_tags(way.tags());
-        if (!is_road_way(tags)) return;
+        if (!is_road_way(tags, ignore_highways_)) return;
 
         RawWay raw;
         raw.id = static_cast<std::int64_t>(way.id());
@@ -103,6 +104,8 @@ private:
         for (const auto& t : list) tags.emplace(t.key(), t.value());
         return tags;
     }
+
+    std::unordered_set<std::string> ignore_highways_;
 };
 
 struct ParseResult {

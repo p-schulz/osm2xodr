@@ -1,5 +1,6 @@
 #include "osm2xodr/cli.hpp"
 
+#include "osm2xodr/config.hpp"
 #include "osm2xodr/util.hpp"
 
 #ifdef OSM2XODR_WITH_LIBOPENDRIVE
@@ -53,6 +54,8 @@ Options parse_args(const int argc, char** argv) {
                       << "  --signal-search-radius <m>     Max signal/sign matching distance, default 20\n"
                       << "  --junction-turn-radius <m>     Fallback connector turn radius for road classes\n"
                       << "                                 without a specific tier, default 8.0\n"
+                      << "  --no-adaptive-turn-radius      Disable scaling connector turn radius by each road's\n"
+                      << "                                 maxspeed tag and the connector's own deflection angle\n"
                       << "  --no-road-merge                Keep one <road> per OSM way segment (disable merging)\n"
                       << "  --junction-cluster-max-gap <m> Max length of an inter-junction road to fold into one\n"
                       << "                                 compound junction, default 20.0\n"
@@ -61,13 +64,20 @@ Options parse_args(const int argc, char** argv) {
                       << "                                 Max length of a traffic-light-to-junction stub road to\n"
                       << "                                 absorb into the junction, default 15.0\n"
                       << "  --no-signal-setback-absorption Disable absorbing traffic-light setback stubs into junctions\n"
-                      << "  --lane-taper-length <m>        Target length over which an added/dropped lane's\n"
+                      << "  --lane-taper-length <m>        Fallback target length over which an added/dropped lane's\n"
                       << "                                 width ramps to/from zero at a merge/split, default 15.0\n"
+                      << "  --no-adaptive-lane-taper       Disable scaling the lane taper length by each road's\n"
+                      << "                                 maxspeed tag (German taper/Verziehungslaenge convention)\n"
                       << "  --no-lane-count-bridge         Disable inserting a short connecting road to reconcile a\n"
                       << "                                 real lane-count change at a plain (non-junction) road-to-\n"
                       << "                                 road boundary, e.g. right before a traffic signal\n"
                       << "  --no-curve-fit                 Keep piecewise <line> planView geometry for non-junction\n"
                       << "                                 roads instead of fitted <paramPoly3> curves\n"
+                      << "  --no-link-continuity-fix       Disable fixing up heading mismatches at plain road-to-\n"
+                      << "                                 road link boundaries (only takes effect with curve-fit on)\n"
+                      << "  --config <path.yaml>           Load a config file; currently supports one key,\n"
+                      << "                                 ignore_highways: a list of OSM highway=* values to\n"
+                      << "                                 exclude entirely (e.g. ignore_highways: [service, track])\n"
                       << "  --report <file>                Write conversion report\n"
                       << "  --validate                     Read generated XODR back with libOpenDRIVE if enabled\n";
             std::exit(0);
@@ -89,6 +99,8 @@ Options parse_args(const int argc, char** argv) {
             o.signal_search_radius = util::parse_double_prefix(require_value(i, arg)).value_or(o.signal_search_radius);
         } else if (arg == "--junction-turn-radius") {
             o.junction_turn_radius = util::parse_double_prefix(require_value(i, arg)).value_or(o.junction_turn_radius);
+        } else if (arg == "--no-adaptive-turn-radius") {
+            o.adaptive_turn_radius = false;
         } else if (arg == "--no-road-merge") {
             o.merge_roads = false;
         } else if (arg == "--junction-cluster-max-gap") {
@@ -101,10 +113,16 @@ Options parse_args(const int argc, char** argv) {
             o.absorb_signal_setbacks = false;
         } else if (arg == "--lane-taper-length") {
             o.lane_taper_length = util::parse_double_prefix(require_value(i, arg)).value_or(o.lane_taper_length);
+        } else if (arg == "--no-adaptive-lane-taper") {
+            o.adaptive_lane_taper = false;
         } else if (arg == "--no-lane-count-bridge") {
             o.bridge_lane_count_changes = false;
         } else if (arg == "--no-curve-fit") {
             o.curve_fit = false;
+        } else if (arg == "--no-link-continuity-fix") {
+            o.fix_link_continuity = false;
+        } else if (arg == "--config") {
+            config::load_config_file(require_value(i, arg), o);
         } else if (arg == "--report") {
             o.report_path = require_value(i, arg);
         } else if (arg == "--validate") {

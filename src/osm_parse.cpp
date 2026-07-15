@@ -18,9 +18,10 @@ bool is_vehicle_highway_value(const std::string& highway) {
     return allowed.count(highway) != 0;
 }
 
-bool is_road_way(const Tags& tags) {
+bool is_road_way(const Tags& tags, const std::unordered_set<std::string>& ignore_highways) {
     const auto highway = tag_value(tags, "highway");
     if (!highway || !is_vehicle_highway_value(*highway)) return false;
+    if (ignore_highways.count(*highway)) return false;
     if (has_tag_value(tags, "area", "yes")) return false;
     if (has_tag_value(tags, "access", "private")) {
         // Keep private roads out by default. A production converter should make this configurable.

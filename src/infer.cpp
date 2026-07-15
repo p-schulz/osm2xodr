@@ -1,6 +1,7 @@
 #include "osm2xodr/infer.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 namespace osm2xodr::infer {
@@ -331,7 +332,63 @@ std::string road_type(const Tags& tags) {
 std::optional<double> parse_maxspeed(const std::string& v) {
     const auto l = util::lower(v);
     if (l == "none" || l == "signals" || l == "walk") return std::nullopt;
-    return util::parse_double_prefix(l);
+    const auto value = util::parse_double_prefix(l);
+    if (!value) return std::nullopt;
+    // OSM allows an explicit unit suffix (e.g. "30 mph"); a bare number is always km/h. Always
+    // return km/h so callers (the maxspeed signal, and the adaptive turn-radius formula below)
+    // never have to special-case units themselves.
+    if (l.find("mph") != std::string::npos) return *value * 1.609344;
+    return value;
+}
+
+// Calibration-anchor "typical" running speed (km/h) per highway class, mirroring
+// turn_radius_for_highway's own class groupings exactly -- used only to calibrate
+// adaptive_turn_radius against that function's tiers, not asserted as a real speed limit.
+// Unmapped classes return nullopt, same spirit as turn_radius_for_highway's own fallback: there's
+// no sensible class-typical speed to calibrate against either.
+std::optional<double> typical_speed_for_highway(const std::string& highway) {
+    if (highway == "motorway" || highway == "motorway_link" || highway == "trunk" || highway == "trunk_link") return 100.0;
+    if (highway == "primary" || highway == "primary_link") return 50.0;
+    if (highway == "secondary" || highway == "secondary_link") return 50.0;
+    if (highway == "tertiary" || highway == "tertiary_link" || highway == "unclassified") return 50.0;
+    if (highway == "residential" || highway == "living_street") return 30.0;
+    if (highway == "service" || highway == "road" || highway == "busway" || highway == "construction") return 20.0;
+    return std::nullopt;
+}
+
+double adaptive_turn_radius(const std::string& in_highway, const std::optional<double> in_maxspeed_kmh,
+                             const std::string& out_highway, const std::optional<double> out_maxspeed_kmh,
+                             const double abs_delta, const Options& options) {
+    const double tier_in = turn_radius_for_highway(in_highway, options);
+    const double tier_out = turn_radius_for_highway(out_highway, options);
+    const double tier = std::max(tier_in, tier_out);
+    if (!options.adaptive_turn_radius) return tier;
+
+    const bool governing_is_in = tier_in >= tier_out;
+    const auto v_typical = typical_speed_for_highway(governing_is_in ? in_highway : out_highway);
+    if (!v_typical) return tier; // unrecognized class -- no anchor to calibrate against
+
+    const auto governing_speed = governing_is_in ? in_maxspeed_kmh : out_maxspeed_kmh;
+    const auto other_speed = governing_is_in ? out_maxspeed_kmh : in_maxspeed_kmh;
+    const auto v_actual = governing_speed ? governing_speed : other_speed;
+    if (!v_actual) return tier; // neither road tagged -- fall back to today's tier exactly
+
+    const double speed_factor = (*v_actual / *v_typical) * (*v_actual / *v_typical);
+    // Smooth, monotonic in abs_delta, exactly 1.0 at the 90 deg anchor (matching the tier's own
+    // calibration point above): a near-straight movement reads a bigger effective radius, a
+    // near-reversal shrinks toward 0 (the caller's own existing floor clamps the final result).
+    const double angle_factor_base = std::cos(abs_delta / 2.0) / std::cos(geo::kPi / 4.0);
+    const double angle_factor = angle_factor_base * angle_factor_base;
+    return tier * speed_factor * angle_factor;
+}
+
+double adaptive_taper_length(const double lane_width, const std::optional<double> maxspeed_kmh,
+                              const double fallback_length, const Options& options) {
+    if (!options.adaptive_lane_taper || !maxspeed_kmh) return fallback_length;
+    // Approximation of the general German lane-taper/Verziehungslaenge convention (length scales
+    // with design speed and the width being shifted) -- see the declaration comment in infer.hpp
+    // for the "not a verified RSA 21 reproduction" caveat.
+    return *maxspeed_kmh * lane_width / 3.0;
 }
 
 model::RoadSignal signal_from_point_feature(const osm::PointFeature& pf, const std::string& id, const double s, const double t) {

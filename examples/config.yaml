@@ -1,0 +1,6 @@
+# Example osm2xodr config file (see --config in the README).
+#
+# ignore_highways: OSM highway=* values to exclude entirely, as if they weren't
+# roads at all -- useful for e.g. dropping parking-aisle/driveway service ways
+# from an extract without editing the source OSM data.
+ignore_highways: [service]

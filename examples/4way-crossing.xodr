@@ -49,8 +49,6 @@
       </laneSection>
     </lanes>
     <signals>
-      <signal s="97.39605794" t="-7.67397332" id="sig_1" name="traffic_light" dynamic="yes" orientation="-" zOffset="0.00000000" country="" type="traffic_light" subtype="" unit="" text=""/>
-      <signal s="97.39605794" t="-0.90093903" id="sig_11" name="traffic_light" dynamic="yes" orientation="-" zOffset="0.00000000" country="" type="traffic_light" subtype="" unit="" text=""/>
       <signal s="97.39605794" t="0.00000000" id="sig_12" name="traffic_light" dynamic="yes" orientation="+" zOffset="0.00000000" country="" type="traffic_light" subtype="" unit="" text=""/>
       <signal s="1.00000000" t="2.75000000" id="maxspeed_w4060137_0" name="maxspeed" dynamic="no" orientation="+" zOffset="0.00000000" country="" type="speed" subtype="max" unit="km/h" text="50" value="50.00000000"/>
     </signals>
@@ -72,7 +70,7 @@
         <paramPoly3 aU="0.00000000" bU="50.81355374" cU="0.00241405" dU="-0.00241397" aV="0.00000000" bV="-0.00285245" cV="0.50099347" dV="-0.49814102" pRange="normalized"/>
       </geometry>
       <geometry s="80.17984122" x="-4.00142805" y="-28.26401871" hdg="1.43129140" length="11.18495160">
-        <paramPoly3 aU="0.00000000" bU="11.17398011" cU="0.02194298" dU="-0.01097149" aV="0.00000000" bV="0.49528857" cV="-0.99057714" dV="0.49528857" pRange="normalized"/>
+        <paramPoly3 aU="0.00000000" bU="11.17398011" cU="0.02217222" dU="-0.01120073" aV="0.00000000" bV="0.49528857" cV="-0.91896692" dV="0.42367835" pRange="normalized"/>
       </geometry>
     </planView>
     <lanes>
@@ -108,7 +106,7 @@
     <type s="0.00000000" type="rural"/>
     <planView>
       <geometry s="0.00000000" x="-2.44612846" y="-17.18772938" hdg="1.41160091" length="5.38921751">
-        <paramPoly3 aU="0.00000000" bU="5.38921751" cU="0.00085628" dU="-0.00085628" aV="0.00000000" bV="-0.00000000" cV="-0.09606561" dV="0.09606561" pRange="normalized"/>
+        <paramPoly3 aU="0.00000000" bU="5.38874173" cU="0.00180785" dU="-0.00133207" aV="0.00000000" bV="0.07161021" cV="-0.23928603" dV="0.16767582" pRange="normalized"/>
       </geometry>
       <geometry s="5.38921751" x="-1.59180897" y="-11.86665772" hdg="1.43745102" length="11.97294539">
         <paramPoly3 aU="0.00000000" bU="11.97255999" cU="0.00077080" dU="-0.00038540" aV="0.00000000" bV="-0.09606561" cV="0.19213121" dV="-0.09606561" pRange="normalized"/>
@@ -481,6 +479,8 @@
       </laneSection>
     </lanes>
     <signals>
+      <signal s="0.00000000" t="-0.00000000" id="sig_1" name="traffic_light" dynamic="yes" orientation="+" zOffset="0.00000000" country="" type="traffic_light" subtype="" unit="" text=""/>
+      <signal s="0.00000000" t="-5.15961207" id="sig_11" name="traffic_light" dynamic="yes" orientation="-" zOffset="0.00000000" country="" type="traffic_light" subtype="" unit="" text=""/>
       <signal s="1.00000000" t="3.50000000" id="maxspeed_w461112404_1" name="maxspeed" dynamic="no" orientation="+" zOffset="0.00000000" country="" type="speed" subtype="max" unit="km/h" text="30" value="30.00000000"/>
     </signals>
   </road>

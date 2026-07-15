@@ -16,6 +16,7 @@ find_package(Threads REQUIRED)
 add_executable(osm2xodr
     src/main.cpp
     src/cli.cpp
+    src/config.cpp
     src/infer.cpp
     src/model_builder.cpp
     src/osm_parse.cpp
