@@ -15,6 +15,7 @@ struct RoadTraces {
     std::vector<WorldPoint> centerline;
     std::vector<WorldPoint> left_edge;  // outer edge of the left lane stack (lane_offset side)
     std::vector<WorldPoint> right_edge; // outer edge of the right lane stack
+    bool is_railway = false; // true if this road's lanes are rail/tram track (see infer_lanes)
 };
 
 // Samples one road's centerline and outer left/right lane-cross-section edges as world-space
@@ -32,9 +33,21 @@ RoadTraces sample_road(const model::RoadSegment& road, double step = 2.0);
 // Mirrors test/xodr_viewer.py's lane_marking_traces(), meant to be drawn dashed.
 std::vector<std::vector<WorldPoint>> sample_lane_markings(const model::RoadSegment& road, double step = 2.0);
 
+struct LaneMarkingTrace {
+    std::vector<WorldPoint> points;
+    bool is_junction = false; // road.junction_id non-empty -- a synthetic junction-connector road
+};
+
+// One transverse line per RoadSignal of type "stop_line" on this road (see
+// infer::stop_line_signal): from the reference line (at that s's lane_offset) out to the far edge
+// of whichever side's lane stack the signal sits on (sig.t's sign), i.e. the stop line spans just
+// the lanes that signal controls, not the full cross-section.
+std::vector<std::vector<WorldPoint>> sample_stop_lines(const model::RoadSegment& road);
+
 struct PreviewGeometry {
     std::vector<RoadTraces> roads;
-    std::vector<std::vector<WorldPoint>> lane_markings;
+    std::vector<LaneMarkingTrace> lane_markings;
+    std::vector<std::vector<WorldPoint>> stop_lines;
     double min_x = -50.0, min_y = -50.0, max_x = 50.0, max_y = 50.0; // bounding box, local meters
 };
 

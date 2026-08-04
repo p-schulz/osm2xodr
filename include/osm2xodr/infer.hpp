@@ -47,6 +47,24 @@ std::string road_type(const Tags& tags);
 
 std::optional<double> parse_maxspeed(const std::string& v);
 
+// Vertical offset in meters from OSM's `layer=*` tag (e.g. layer=-1 -> a tunnel one level below
+// ground, layer=1 -> a bridge one level above), at a fixed 3.5m per layer. 0.0 when the tag is
+// absent or unparseable (the default/ground layer).
+double elevation_offset(const Tags& tags);
+
 model::RoadSignal signal_from_point_feature(const osm::PointFeature& pf, const std::string& id, const double s, const double t);
+
+// A companion "stop_line" signal at the same s/t as a traffic_light signal: OSM has no separate tag
+// for a distinct stop-line position, and a highway=traffic_signals node is conventionally placed
+// right at the stop line already, so this just marks the same point as the other kind of thing.
+model::RoadSignal stop_line_signal(const std::string& id, const double s, const double t);
+
+// True for a traffic_light point feature that's actually pedestrian-facing, not a vehicle stop
+// position: a highway=traffic_signals node tagged traffic_signals=pedestrian_crossing (a
+// pedestrian-facing signal head at an otherwise vehicle intersection), or a highway=crossing node
+// tagged crossing=traffic_signals (a dedicated, often standalone/mid-block pedestrian crossing
+// signal). Both are still real traffic control devices -- signal_from_point_feature emits the same
+// traffic_light signal for either -- they just don't mark where a vehicle must stop.
+bool is_pedestrian_traffic_light(const Tags& tags);
 
 } // namespace osm2xodr::infer

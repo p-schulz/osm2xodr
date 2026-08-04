@@ -46,6 +46,28 @@ void write_lane(std::ostream& os, const model::LaneSpec& lane, const int indent,
         os << "<width" << util::attr("sOffset", 0.0) << util::attr("a", lane.width)
            << util::attr("b", b) << util::attr("c", 0.0) << util::attr("d", 0.0) << "/>\n";
     }
+    // A curb's <height> (e.g. a dropped-curb taper -- see model_builder.cpp's
+    // apply_curb_cut_tapers). Every non-curb lane defaults height=0.0/height_end=-1.0 and so never
+    // emits anything here, mirroring how <width> is gated purely on its own numeric fields.
+    if (lane.height > 0.0 || lane.height_end >= 0.0) {
+        if (lane.height_end < 0.0 || std::abs(lane.height_end - lane.height) < 1e-6 || road_length <= 1e-6) {
+            write_indent(os, indent + 2);
+            os << "<height" << util::attr("sOffset", 0.0)
+               << util::attr("inner", lane.height) << util::attr("outer", lane.height) << "/>\n";
+        } else {
+            // OpenDRIVE's <height> element is a step function (sOffset/inner/outer only -- unlike
+            // <width>, it has no a/b/c/d polynomial), so a linear ramp can only be approximated as a
+            // short staircase of discrete records, not one entry with a slope.
+            constexpr int kHeightTaperSteps = 6;
+            for (int i = 0; i <= kHeightTaperSteps; ++i) {
+                const double frac = static_cast<double>(i) / kHeightTaperSteps;
+                const double h = lane.height + (lane.height_end - lane.height) * frac;
+                write_indent(os, indent + 2);
+                os << "<height" << util::attr("sOffset", frac * road_length)
+                   << util::attr("inner", h) << util::attr("outer", h) << "/>\n";
+            }
+        }
+    }
     write_indent(os, indent + 2);
     os << "<roadMark" << util::attr("sOffset", 0.0)
        << util::attr("type", lane.roadmark_type)
@@ -158,6 +180,31 @@ void write_lane_section(std::ostream& os, const double s_offset, const model::La
     os << "</laneSection>\n";
 }
 
+// Mirrors write_lanes()'s <laneOffset> handling below: skip the whole element entirely when every
+// section is flat at zero (the overwhelmingly common case -- no OSM `layer` tag anywhere on this
+// road), otherwise emit one <elevation> per section boundary so a later section isn't silently
+// positioned using an earlier, unrelated section's elevation.
+void write_elevation_profile(std::ostream& os, const model::RoadSegment& road, const int indent) {
+    bool any_elevation = std::abs(road.elevation) > 1e-6 || std::abs(road.elevation_slope) > 1e-9;
+    for (const auto& section : road.extra_lane_sections) {
+        any_elevation = any_elevation || std::abs(section.elevation) > 1e-6 || std::abs(section.elevation_slope) > 1e-9;
+    }
+    if (!any_elevation) return;
+
+    write_indent(os, indent);
+    os << "<elevationProfile>\n";
+    write_indent(os, indent + 2);
+    os << "<elevation" << util::attr("s", 0.0) << util::attr("a", road.elevation)
+       << util::attr("b", road.elevation_slope) << util::attr("c", 0.0) << util::attr("d", 0.0) << "/>\n";
+    for (const auto& section : road.extra_lane_sections) {
+        write_indent(os, indent + 2);
+        os << "<elevation" << util::attr("s", section.s_offset) << util::attr("a", section.elevation)
+           << util::attr("b", section.elevation_slope) << util::attr("c", 0.0) << util::attr("d", 0.0) << "/>\n";
+    }
+    write_indent(os, indent);
+    os << "</elevationProfile>\n";
+}
+
 void write_lanes(std::ostream& os, const model::RoadSegment& road, const int indent) {
     write_indent(os, indent);
     os << "<lanes>\n";
@@ -252,6 +299,7 @@ void write_road(std::ostream& os, const model::RoadSegment& road, const int inde
     }
 
     write_plan_view(os, road, indent + 2);
+    write_elevation_profile(os, road, indent + 2);
     write_lanes(os, road, indent + 2);
     write_signals(os, road, indent + 2);
 

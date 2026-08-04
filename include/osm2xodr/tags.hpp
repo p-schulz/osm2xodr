@@ -50,6 +50,12 @@ inline void swap_directional_tags(Tags& tags) {
     swap_if_present(tags, "turn:lanes:forward", "turn:lanes:backward");
     swap_if_present(tags, "change:lanes:forward", "change:lanes:backward");
     swap_if_present(tags, "sidewalk:left", "sidewalk:right");
+    swap_if_present(tags, "sidewalk:left:width", "sidewalk:right:width");
+    // Not real OSM tags -- an internal signal set by ModelBuilder::apply_grass_verges() (see
+    // model_builder.cpp) so infer_lanes stays pure/way-local while still surviving fuse_chain's
+    // from-scratch LanePlan recompute on a reversed merge-chain constituent, exactly like the
+    // sidewalk pair above.
+    swap_if_present(tags, "osm2xodr:grass_verge_left", "osm2xodr:grass_verge_right");
 }
 
 } // namespace osm2xodr

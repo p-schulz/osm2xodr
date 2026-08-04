@@ -6,9 +6,10 @@ benchmark_manifest.json), under one or more CLI flag variants, and aggregates:
 
   - wall-clock time and (best-effort, via `/usr/bin/time`) peak RSS,
   - output size and road/junction/connector counts parsed from the .xodr,
-  - the four existing geometric self-consistency checkers
+  - the six existing geometric self-consistency checkers
     (check_junction_continuity.py, check_turn_lane_routing.py,
-    check_road_link_continuity.py, check_road_geometry_continuity.py), and
+    check_road_link_continuity.py, check_road_geometry_continuity.py,
+    check_curb_height_continuity.py, check_median_grass_lanes.py), and
   - a connector-fallback rate (fraction of junction <connection> entries whose
     connectingRoad is a direct road-to-road link rather than a real synthetic
     connector -- see README "Important limitations").
@@ -48,6 +49,11 @@ TURNLANE_RE = re.compile(
     r'\((\d+) lane/junction-end checks\), (\d+) violation'
 )
 GEOMCONT_RE = re.compile(r'Checked (\d+) internal geometry-to-geometry boundary\(ies\), (\d+) mismatched')
+CURBHEIGHT_RE = re.compile(r'Checked (\d+) plain road-to-road curb-height link\(s\), (\d+) mismatched')
+CURBCROSSING_RE = re.compile(r'Checked (\d+) curb height\(s\) at highway=crossing nodes, (\d+) violation')
+MEDIAN_RE = re.compile(r'Checked (\d+) median lane\(s\), (\d+) violation')
+GRASSVERGE_RE = re.compile(r'Checked (\d+) laneSection/side\(s\) for grass-verge placement, (\d+) violation')
+LANEOVERLAP_RE = re.compile(r'Checked (\d+) name/ref-matched road pair\(s\) for lane-width overlap, (\d+) violation')
 # A checker's mismatch tolerance (1mm/0.001rad) is calibrated for geometry the converter
 # constructs itself (junction connectors); it is not a meaningful bug signal at plain
 # road-to-road boundaries, where the two adjacent OSM ways' own digitized headings rarely
@@ -273,7 +279,29 @@ def evaluate_fixture(binary, fixture, variant_name, variant_flags, outdir, repea
     row['geomcont_checked'], row['geomcont_mismatched'] = (int(m.group(1)), int(m.group(2))) if m else (None, None)
     row['geomcont_check_ok'] = ok_g
 
-    row['all_checks_ok'] = ok_j and ok_r and ok_t and ok_g
+    ok_c, out_c, _ = run_checker(
+        [str(REPO_ROOT / 'test/check_curb_height_continuity.py'), str(osm_path), str(xodr_path)])
+    m = CURBHEIGHT_RE.search(out_c)
+    row['curbheight_checked'], row['curbheight_mismatched'] = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    m = CURBCROSSING_RE.search(out_c)
+    row['curbcrossing_checked'], row['curbcrossing_violations'] = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    row['curbheight_check_ok'] = ok_c
+
+    ok_m, out_m, _ = run_checker(
+        [str(REPO_ROOT / 'test/check_median_grass_lanes.py'), str(osm_path), str(xodr_path)])
+    m = MEDIAN_RE.search(out_m)
+    row['median_checked'], row['median_violations'] = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    m = GRASSVERGE_RE.search(out_m)
+    row['grassverge_checked'], row['grassverge_violations'] = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    row['median_grass_check_ok'] = ok_m
+
+    ok_o, out_o, _ = run_checker(
+        [str(REPO_ROOT / 'test/check_lane_width_overlap.py'), str(osm_path), str(xodr_path)])
+    m = LANEOVERLAP_RE.search(out_o)
+    row['laneoverlap_checked'], row['laneoverlap_violations'] = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    row['laneoverlap_check_ok'] = ok_o
+
+    row['all_checks_ok'] = ok_j and ok_r and ok_t and ok_g and ok_c and ok_m and ok_o
     return row
 
 

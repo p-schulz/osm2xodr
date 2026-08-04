@@ -108,9 +108,12 @@ DecodedTurnLanes decode_turn_lanes(const Tags& tags, const std::string& suffix) 
     return result;
 }
 
-void detect_sidewalks(const Tags& tags, bool* left, bool* right) {
+void detect_sidewalks(const Tags& tags, const Options& options, bool* left, bool* right,
+                       double* left_width, double* right_width) {
     *left = false;
     *right = false;
+    *left_width = options.sidewalk_width;
+    *right_width = options.sidewalk_width;
 
     const auto sw = tag_value(tags, "sidewalk");
     if (sw) {
@@ -128,6 +131,16 @@ void detect_sidewalks(const Tags& tags, bool* left, bool* right) {
     if (sw_left) *left = !util::falsy_osm(*sw_left);
     const auto sw_right = tag_value(tags, "sidewalk:right");
     if (sw_right) *right = !util::falsy_osm(*sw_right);
+
+    // sidewalk:width is a both-sides fallback; sidewalk:left:width/sidewalk:right:width override it
+    // per side when present -- the same fallback-then-per-side-override chain used for driving-lane
+    // widths (width -> width:lanes -> width:lanes:forward|backward) above.
+    if (const auto both_w = double_tag(tags, "sidewalk:width")) {
+        *left_width = *both_w;
+        *right_width = *both_w;
+    }
+    if (const auto lw = double_tag(tags, "sidewalk:left:width")) *left_width = *lw;
+    if (const auto rw = double_tag(tags, "sidewalk:right:width")) *right_width = *rw;
 }
 
 std::string center_marking_type(const Tags& tags, const bool oneway) {
@@ -139,6 +152,29 @@ std::string center_marking_type(const Tags& tags, const bool oneway) {
 
 model::LanePlan infer_lanes(const Tags& tags, const Options& options, std::vector<std::string>& warnings, const std::string& road_id) {
     model::LanePlan plan;
+
+    // railway=rail/tram tracks aren't road traffic: a single track lane, no driving-lane inference
+    // (turn:lanes, sidewalks, lane counts, markings) applies to them.
+    if (const auto railway = tag_value(tags, "railway"); railway && (*railway == "rail" || *railway == "tram")) {
+        plan.oneway = true;
+        plan.forward_lanes = 1;
+        plan.backward_lanes = 0;
+        plan.center_mark = "none";
+
+        model::LaneSpec lane;
+        lane.id = -1;
+        lane.type = *railway;
+        lane.width = options.default_lane_width;
+        lane.roadmark_type = "none";
+        lane.roadmark_weight = "standard";
+        lane.roadmark_color = "standard";
+        lane.lane_change = "none";
+        plan.right.push_back(std::move(lane));
+
+        plan.lane_offset = model::compute_lane_offset(plan);
+        return plan;
+    }
+
     plan.oneway = is_oneway(tags);
     const std::string highway = tag_value_or(tags, "highway", "road");
     const double default_width = default_width_for_highway(highway, options);
@@ -201,7 +237,9 @@ model::LanePlan infer_lanes(const Tags& tags, const Options& options, std::vecto
 
     bool left_sw = false;
     bool right_sw = false;
-    detect_sidewalks(tags, &left_sw, &right_sw);
+    double left_sw_width = options.sidewalk_width;
+    double right_sw_width = options.sidewalk_width;
+    detect_sidewalks(tags, options, &left_sw, &right_sw, &left_sw_width, &right_sw_width);
     plan.left_sidewalk = left_sw;
     plan.right_sidewalk = right_sw;
     plan.center_mark = center_marking_type(tags, plan.oneway);
@@ -263,48 +301,181 @@ model::LanePlan infer_lanes(const Tags& tags, const Options& options, std::vecto
         return {};
     };
 
+    // median=yes is a real OSM boolean tag on the way itself; a median is inherently symmetric, so
+    // it always gets half of options.median_width on each physical side (innermost, index 0), with
+    // its own adjacent curb LaneSpec (reusing options.curb_width/curb_height -- the same fields the
+    // sidewalk-curb block below already uses) immediately outboard of it, between the median and
+    // the first real driving lane. left_id_base/right_id_base shift every driving lane's own id by
+    // however many of these two slots actually got inserted; nothing downstream needs to change,
+    // since the sidewalk-curb block already computes its own id from plan.left.size()/
+    // plan.right.size() at push time rather than a fixed formula, and compute_lane_offset sums
+    // whatever is actually present rather than assuming a particular lane count.
+    int left_id_base = 0;
+    int right_id_base = 0;
+    if (options.infer_medians && has_tag_value(tags, "median", "yes")) {
+        const double half_width = options.median_width / 2.0;
+        auto make_median_half = [&](const int id) {
+            model::LaneSpec median;
+            median.id = id;
+            median.type = "median";
+            median.width = half_width;
+            median.roadmark_type = "none";
+            median.lane_change = "none";
+            return median;
+        };
+        plan.left.push_back(make_median_half(1));
+        plan.right.push_back(make_median_half(-1));
+        left_id_base = right_id_base = 1;
+
+        if (options.infer_curbs) {
+            auto make_median_curb = [&](const int id) {
+                model::LaneSpec curb;
+                curb.id = id;
+                curb.type = "curb";
+                curb.width = options.curb_width;
+                curb.height = options.curb_height;
+                curb.roadmark_type = "none";
+                curb.lane_change = "none";
+                return curb;
+            };
+            plan.left.push_back(make_median_curb(2));
+            plan.right.push_back(make_median_curb(-2));
+            left_id_base = right_id_base = 2;
+        }
+    }
+
     if (!options.left_hand_traffic) {
         for (int i = 1; i <= plan.backward_lanes; ++i) {
-            auto lane = make_drive_lane(i, width_for_backward(i), i == plan.backward_lanes && !plan.left_sidewalk);
+            auto lane = make_drive_lane(left_id_base + i, width_for_backward(i), i == plan.backward_lanes && !plan.left_sidewalk);
             lane.turn_directions = turn_set_for(decoded_back, i);
             plan.left.push_back(std::move(lane));
         }
         for (int i = 1; i <= plan.forward_lanes; ++i) {
-            auto lane = make_drive_lane(-i, width_for_forward(i), i == plan.forward_lanes && !plan.right_sidewalk);
+            auto lane = make_drive_lane(-(right_id_base + i), width_for_forward(i), i == plan.forward_lanes && !plan.right_sidewalk);
             lane.turn_directions = turn_set_for(decoded_fwd, i);
             plan.right.push_back(std::move(lane));
         }
     } else {
         // Left-hand traffic reverses the convention of which physical side carries reference-direction traffic.
         for (int i = 1; i <= plan.forward_lanes; ++i) {
-            auto lane = make_drive_lane(i, width_for_forward(i), i == plan.forward_lanes && !plan.left_sidewalk);
+            auto lane = make_drive_lane(left_id_base + i, width_for_forward(i), i == plan.forward_lanes && !plan.left_sidewalk);
             lane.turn_directions = turn_set_for(decoded_fwd, i);
             plan.left.push_back(std::move(lane));
         }
         for (int i = 1; i <= plan.backward_lanes; ++i) {
-            auto lane = make_drive_lane(-i, width_for_backward(i), i == plan.backward_lanes && !plan.right_sidewalk);
+            auto lane = make_drive_lane(-(right_id_base + i), width_for_backward(i), i == plan.backward_lanes && !plan.right_sidewalk);
             lane.turn_directions = turn_set_for(decoded_back, i);
             plan.right.push_back(std::move(lane));
         }
     }
 
+    // Adjacent lanes that are both exclusively dedicated to the same turn (e.g. a dual left-turn
+    // pocket) get dashed markings all around the pair -- between them, and on the boundary to
+    // either side -- instead of the default outer-solid/inner-broken rule, since drivers routinely
+    // shift between the two lanes while queuing for the same turn. A lane's own roadmark always
+    // describes the boundary on its outward (away-from-center) side, so "left of the pair" is
+    // owned by the lane just inside it (or plan.center_mark, if the pair starts at the centerline).
+    auto same_exclusive_turn = [](const std::vector<std::string>& a, const std::vector<std::string>& b) {
+        return a.size() == 1 && b.size() == 1 && a[0] == b[0] && a[0] != "through";
+    };
+    auto dash_double_turn_lanes = [&](std::vector<model::LaneSpec>& side) {
+        for (std::size_t i = 0; markings && i + 1 < side.size(); ++i) {
+            if (!same_exclusive_turn(side[i].turn_directions, side[i + 1].turn_directions)) continue;
+            side[i].roadmark_type = "broken";
+            side[i].lane_change = "both";
+            side[i + 1].roadmark_type = "broken";
+            side[i + 1].lane_change = "both";
+            if (i == 0) {
+                plan.center_mark = "broken";
+            } else {
+                side[i - 1].roadmark_type = "broken";
+                side[i - 1].lane_change = "both";
+            }
+        }
+    };
+    dash_double_turn_lanes(plan.left);
+    dash_double_turn_lanes(plan.right);
+
     if (plan.left_sidewalk) {
+        if (options.infer_curbs) {
+            model::LaneSpec curb;
+            curb.id = static_cast<int>(plan.left.size()) + 1;
+            curb.type = "curb";
+            curb.width = options.curb_width;
+            curb.height = options.curb_height;
+            curb.roadmark_type = "none";
+            curb.lane_change = "none";
+            plan.left.push_back(curb);
+        }
         model::LaneSpec lane;
         lane.id = static_cast<int>(plan.left.size()) + 1;
         lane.type = "sidewalk";
-        lane.width = options.sidewalk_width;
+        lane.width = left_sw_width;
         lane.roadmark_type = "solid";
         lane.lane_change = "none";
         plan.left.push_back(lane);
     }
     if (plan.right_sidewalk) {
+        if (options.infer_curbs) {
+            model::LaneSpec curb;
+            curb.id = -static_cast<int>(plan.right.size()) - 1;
+            curb.type = "curb";
+            curb.width = options.curb_width;
+            curb.height = options.curb_height;
+            curb.roadmark_type = "none";
+            curb.lane_change = "none";
+            plan.right.push_back(curb);
+        }
         model::LaneSpec lane;
         lane.id = -static_cast<int>(plan.right.size()) - 1;
         lane.type = "sidewalk";
-        lane.width = options.sidewalk_width;
+        lane.width = right_sw_width;
         lane.roadmark_type = "solid";
         lane.lane_change = "none";
         plan.right.push_back(lane);
+    }
+
+    // Roadside grass verges are spatially detected (real landuse=grass polygon adjacency, not a
+    // real OSM tag on the road) by ModelBuilder::apply_grass_verges(), which runs once per fragment
+    // before merging and, on a match, sets an internal synthetic tag here
+    // ("osm2xodr:grass_verge_left"/"osm2xodr:grass_verge_right" = "yes") and re-invokes this
+    // function -- keeping infer_lanes itself pure/way-local (no spatial data ever crosses its
+    // signature) while still surviving a fuse_chain reversal correctly: swap_directional_tags
+    // already flips this tag pair the same way it flips sidewalk:left/right, so a reversed
+    // merge-chain constituent's freshly-recomputed LanePlan still gets the border lane on the
+    // correct physical side. Runs after the sidewalk/curb block above and computes its own id from
+    // the side vector's current size, so it always lands outboard of whatever's already there
+    // (driving lanes, and curb+sidewalk if present) without special-casing sidewalk presence.
+    if (options.infer_grass_verges) {
+        auto add_grass_verge = [&](std::vector<model::LaneSpec>& side, const bool is_left) {
+            // A side can only ever have ONE contiguous run of a given lane type for fuse_chain's/
+            // build_bridge_side's own type-keyed alignment to work correctly (they group every
+            // lane of a type across the whole side, not by contiguous run) -- so skip this verge's
+            // own curb when the side already carries one (typically the roadway-to-sidewalk curb).
+            // A second, physically separate curb further outboard isn't realistic streetscape
+            // design anyway (the sidewalk-to-verge transition is normally flush, not raised).
+            const bool already_has_curb = std::any_of(side.begin(), side.end(),
+                [](const model::LaneSpec& l) { return l.type == "curb"; });
+            if (options.infer_curbs && !already_has_curb) {
+                model::LaneSpec curb;
+                curb.id = is_left ? static_cast<int>(side.size()) + 1 : -static_cast<int>(side.size()) - 1;
+                curb.type = "curb";
+                curb.width = options.curb_width;
+                curb.height = options.curb_height;
+                curb.roadmark_type = "none";
+                curb.lane_change = "none";
+                side.push_back(curb);
+            }
+            model::LaneSpec border;
+            border.id = is_left ? static_cast<int>(side.size()) + 1 : -static_cast<int>(side.size()) - 1;
+            border.type = "border";
+            border.width = options.border_width;
+            border.roadmark_type = "none";
+            border.lane_change = "none";
+            side.push_back(border);
+        };
+        if (has_tag_value(tags, "osm2xodr:grass_verge_left", "yes")) add_grass_verge(plan.left, true);
+        if (has_tag_value(tags, "osm2xodr:grass_verge_right", "yes")) add_grass_verge(plan.right, false);
     }
 
     plan.lane_offset = model::compute_lane_offset(plan);
@@ -327,6 +498,15 @@ std::string road_type(const Tags& tags) {
     if (highway == "motorway" || highway == "motorway_link") return "motorway";
     if (highway == "trunk" || highway == "primary" || highway == "secondary" || highway == "tertiary") return "rural";
     return "town";
+}
+
+double elevation_offset(const Tags& tags) {
+    constexpr double kLayerHeightM = 3.5;
+    const auto layer = tag_value(tags, "layer");
+    if (!layer) return 0.0;
+    const auto n = util::parse_int(*layer);
+    if (!n) return 0.0;
+    return static_cast<double>(*n) * kLayerHeightM;
 }
 
 std::optional<double> parse_maxspeed(const std::string& v) {
@@ -419,6 +599,22 @@ model::RoadSignal signal_from_point_feature(const osm::PointFeature& pf, const s
         sig.text = tag_value_or(pf.tags, "traffic_sign", "");
     }
     return sig;
+}
+
+model::RoadSignal stop_line_signal(const std::string& id, const double s, const double t) {
+    model::RoadSignal sig;
+    sig.id = id;
+    sig.s = std::max(0.0, s);
+    sig.t = t;
+    sig.name = "stop_line";
+    sig.orientation = t >= 0.0 ? "+" : "-";
+    sig.dynamic = false;
+    sig.type = "stop_line";
+    return sig;
+}
+
+bool is_pedestrian_traffic_light(const Tags& tags) {
+    return has_tag_value(tags, "traffic_signals", "pedestrian_crossing") || has_tag_value(tags, "crossing", "traffic_signals");
 }
 
 } // namespace osm2xodr::infer

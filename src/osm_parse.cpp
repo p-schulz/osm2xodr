@@ -9,12 +9,17 @@
 
 namespace osm2xodr::osm {
 
-bool is_vehicle_highway_value(const std::string& highway) {
-    static const std::unordered_set<std::string> allowed = {
+const std::vector<std::string>& vehicle_highway_values() {
+    static const std::vector<std::string> values = {
         "motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential",
         "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
         "living_street", "service", "road", "busway", "construction"
     };
+    return values;
+}
+
+bool is_vehicle_highway_value(const std::string& highway) {
+    static const std::unordered_set<std::string> allowed(vehicle_highway_values().begin(), vehicle_highway_values().end());
     return allowed.count(highway) != 0;
 }
 
@@ -28,6 +33,15 @@ bool is_road_way(const Tags& tags, const std::unordered_set<std::string>& ignore
         return false;
     }
     return true;
+}
+
+bool is_railway_track_way(const Tags& tags) {
+    const auto railway = tag_value(tags, "railway");
+    return railway && (*railway == "rail" || *railway == "tram");
+}
+
+bool is_grass_area_way(const Tags& tags) {
+    return has_tag_value(tags, "landuse", "grass");
 }
 
 bool is_relevant_point_feature(const Tags& tags, std::string* kind) {
@@ -51,6 +65,10 @@ bool is_relevant_point_feature(const Tags& tags, std::string* kind) {
         *kind = "traffic_light";
         return true;
     }
+    if (has_tag_value(tags, "highway", "crossing")) {
+        *kind = "crossing";
+        return true;
+    }
     return false;
 }
 
@@ -69,6 +87,7 @@ ParseResult parse_osm(const Options& options) {
 
     ParseResult result;
     result.roads = std::move(handler.roads);
+    result.grass_areas = std::move(handler.grass_areas);
     result.point_features = std::move(handler.point_features);
     result.projector = handler.projector;
     result.warnings = std::move(handler.warnings);

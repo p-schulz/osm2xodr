@@ -17,6 +17,13 @@ struct LaneSpec {
     std::string type = "driving";
     double width = 3.5;
     double width_end = -1.0; // if >= 0, width tapers linearly from `width` (s=0) to `width_end` (s=length)
+    double height = 0.0;      // curb height (m) at this LaneSection's own local s=0; meaningful only
+                              // for type=="curb" -- 0.0 elsewhere, which the writer treats as "omit
+                              // <height>" (mirrors width's own "0 or more" convention).
+    double height_end = -1.0; // if >= 0, height tapers linearly from `height` (local s=0) to
+                              // `height_end` (local s = this section's own span length) -- the
+                              // dropped-curb ramp at a pedestrian crossing. Sentinel -1.0 mirrors
+                              // width_end exactly.
     std::string roadmark_type = "broken";
     std::string roadmark_weight = "standard";
     std::string roadmark_color = "standard";
@@ -106,6 +113,9 @@ struct LaneSection {
     Tags tags;
     std::int64_t source_way_id = 0;
     int segment_index = 0;
+    double elevation = 0.0;       // this section's own elevationProfile "a" (see RoadSegment::elevation)
+    double elevation_slope = 0.0; // "b"; flat (0.0) unless model_builder.cpp's smooth_railway_elevation()
+                                   // turned an abrupt layer-change boundary into a ramp (rail/tram only).
 };
 
 struct RoadSegment {
@@ -125,6 +135,13 @@ struct RoadSegment {
     std::string junction_id;                    // non-empty for synthetic junction-connector roads
     std::vector<GeomPrimitive> explicit_geometry; // if non-empty, overrides `points` for planView output
     std::vector<LaneSection> extra_lane_sections; // additional s>0 laneSection/type boundaries from merging
+    // elevationProfile's <elevation s="0" a=... b=... c="0" d="0">: `elevation` (a) comes from this
+    // road's own OSM `layer` tag (see infer::elevation_offset) for a real road, or is linearly
+    // interpolated from the incoming/outgoing real roads' own elevation for a synthetic junction-
+    // connector or lane-count-bridge road (see model_builder.cpp's elevation_at_road_end()), in
+    // which case `elevation_slope` (b) is the nonzero ramp rate that makes the two ends match.
+    double elevation = 0.0;
+    double elevation_slope = 0.0;
 };
 
 struct EndpointRef {

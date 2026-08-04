@@ -36,13 +36,20 @@ struct PointFeature {
     std::string kind;
 };
 
+// The fixed set of highway=* values admitted as ordinary vehicle roads (see is_vehicle_highway_value
+// below, which is just a fast-lookup wrapper around this same list) -- exposed so a UI can offer a
+// per-value "ignore this class entirely" toggle without duplicating the list independently.
+const std::vector<std::string>& vehicle_highway_values();
 bool is_vehicle_highway_value(const std::string& highway);
 bool is_road_way(const Tags& tags, const std::unordered_set<std::string>& ignore_highways);
+bool is_railway_track_way(const Tags& tags);
+bool is_grass_area_way(const Tags& tags);
 bool is_relevant_point_feature(const Tags& tags, std::string* kind);
 
 class CollectHandler final : public osmium::handler::Handler {
 public:
     std::vector<RawWay> roads;
+    std::vector<RawWay> grass_areas; // closed ways tagged landuse=grass; reuses RawWay as-is
     std::vector<PointFeature> point_features;
     std::vector<std::string> warnings;
     geo::LocalProjector projector;
@@ -72,7 +79,27 @@ public:
 
     void way(const osmium::Way& way) {
         Tags tags = read_tags(way.tags());
-        if (!is_road_way(tags, ignore_highways_)) return;
+        if (is_grass_area_way(tags)) {
+            RawWay raw;
+            raw.id = static_cast<std::int64_t>(way.id());
+            raw.tags = std::move(tags);
+            for (const auto& nr : way.nodes()) {
+                if (!nr.location().valid()) {
+                    warnings.push_back("Grass area way " + std::to_string(raw.id) + " references node " +
+                        std::to_string(nr.ref()) + " without a resolved location; skipped that node.");
+                    continue;
+                }
+                projector.ensure_origin(nr.lat(), nr.lon());
+                raw.nodes.push_back({static_cast<std::int64_t>(nr.ref()), {nr.lon(), nr.lat()}});
+            }
+            if (raw.nodes.size() < 3) {
+                warnings.push_back("Grass area way " + std::to_string(raw.id) + " has fewer than three located nodes and was ignored.");
+                return;
+            }
+            grass_areas.push_back(std::move(raw));
+            return;
+        }
+        if (!is_road_way(tags, ignore_highways_) && !is_railway_track_way(tags)) return;
 
         RawWay raw;
         raw.id = static_cast<std::int64_t>(way.id());
@@ -110,6 +137,7 @@ private:
 
 struct ParseResult {
     std::vector<RawWay> roads;
+    std::vector<RawWay> grass_areas;
     std::vector<PointFeature> point_features;
     geo::LocalProjector projector;
     std::vector<std::string> warnings;

@@ -3,6 +3,7 @@
 #include "osm2xodr/model_builder.hpp"
 #include "osm2xodr/osm_parse.hpp"
 #include "osm2xodr/report.hpp"
+#include "osm2xodr/util.hpp"
 #include "osm2xodr/xodr_writer.hpp"
 
 #include <imgui.h>
@@ -11,21 +12,40 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
+#include <fstream>
+#include <unordered_set>
 
 namespace osm2xodr::gui {
 
 namespace {
-constexpr float kToolbarHeight = 36.0f;
+constexpr float kToolbarHeight = 64.0f; // two rows: actions+toggles, then per-layer brightness/contrast
 constexpr float kSplitterWidth = 6.0f;
 constexpr double kMarkingDashM = 3.0; // dash/gap length in world meters, matching test/xodr_viewer.py
 constexpr double kMarkingGapM = 3.0;
 
-// Swapped from the original red-centerline/yellow-edges scheme: centerline is now yellow, lane
-// edges are now red.
-const ImU32 kColorCenter = IM_COL32(255, 212, 0, 230);
-const ImU32 kColorLane = IM_COL32(255, 80, 80, 200);
-const ImU32 kColorMarking = IM_COL32(235, 235, 235, 220);
+ImU32 style_color(const LineStyle& style) {
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(style.color[0], style.color[1], style.color[2], style.color[3]));
+}
+
+// View-preference persistence: a flat key=value text file (not ImGui's own imgui.ini, which is
+// for window/widget layout, not arbitrary app data), written next to wherever the binary is run
+// from -- same relative-to-CWD convention as imgui.ini already uses in this project.
+constexpr const char* kSettingsFileName = "osm2xodr_gui_settings.ini";
+
+void write_style(std::ofstream& out, const char* key, const LineStyle& style) {
+    out << key << "_color=" << style.color[0] << ',' << style.color[1] << ',' << style.color[2] << ','
+        << style.color[3] << '\n';
+    out << key << "_width=" << style.width << '\n';
+}
+
+bool parse_color4(const std::string& value, float out[4]) {
+    float parsed[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (std::sscanf(value.c_str(), "%f,%f,%f,%f", &parsed[0], &parsed[1], &parsed[2], &parsed[3]) != 4) return false;
+    for (int i = 0; i < 4; ++i) out[i] = std::clamp(parsed[i], 0.0f, 1.0f);
+    return true;
+}
 
 double rad_to_deg(double r) { return r * 180.0 / geo::kPi; }
 
@@ -129,10 +149,76 @@ void Camera::fit(double min_x, double min_y, double max_x, double max_y, float m
     scale = static_cast<float>(std::min(width / (w * margin), height / (h * margin)));
 }
 
-GuiApp::GuiApp() { add_session(); }
+GuiApp::GuiApp() {
+    load_settings();
+    add_session();
+}
 
 GuiApp::~GuiApp() {
-    for (auto& session : sessions_) release_tile(session.imagery);
+    save_settings();
+    for (auto& session : sessions_) {
+        release_tile(session.imagery);
+        release_tile(session.landuse);
+    }
+}
+
+void GuiApp::save_settings() const {
+    std::ofstream out(kSettingsFileName, std::ios::trunc);
+    if (!out) return; // not fatal -- just means next launch starts from defaults again
+
+    out << "show_imagery=" << (show_imagery_ ? 1 : 0) << '\n';
+    out << "show_landuse=" << (show_landuse_ ? 1 : 0) << '\n';
+    out << "show_center=" << (show_center_ ? 1 : 0) << '\n';
+    out << "show_lanes=" << (show_lanes_ ? 1 : 0) << '\n';
+    out << "show_markings=" << (show_markings_ ? 1 : 0) << '\n';
+    out << "show_stop_lines=" << (show_stop_lines_ ? 1 : 0) << '\n';
+    out << "brightness=" << brightness_ << '\n';
+    out << "contrast=" << contrast_ << '\n';
+    out << "landuse_brightness=" << landuse_brightness_ << '\n';
+    out << "landuse_contrast=" << landuse_contrast_ << '\n';
+    write_style(out, "reference_line", reference_line_style_);
+    write_style(out, "road_border", road_border_style_);
+    write_style(out, "marking", marking_style_);
+    write_style(out, "rail_track", rail_track_style_);
+    out << "junction_marking_dash=" << junction_marking_dash_m_ << '\n';
+    out << "junction_marking_gap=" << junction_marking_gap_m_ << '\n';
+    write_style(out, "stop_line", stop_line_style_);
+}
+
+void GuiApp::load_settings() {
+    std::ifstream in(kSettingsFileName);
+    if (!in) return; // no saved settings yet -- keep the member defaults
+
+    std::string line;
+    while (std::getline(in, line)) {
+        const std::size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = line.substr(0, eq);
+        const std::string value = line.substr(eq + 1);
+
+        if (key == "show_imagery") show_imagery_ = value == "1";
+        else if (key == "show_landuse") show_landuse_ = value == "1";
+        else if (key == "show_center") show_center_ = value == "1";
+        else if (key == "show_lanes") show_lanes_ = value == "1";
+        else if (key == "show_markings") show_markings_ = value == "1";
+        else if (key == "show_stop_lines") show_stop_lines_ = value == "1";
+        else if (key == "brightness") brightness_ = std::clamp(std::atoi(value.c_str()), -150, 150);
+        else if (key == "contrast") contrast_ = std::clamp(std::strtof(value.c_str(), nullptr), 0.2f, 3.0f);
+        else if (key == "landuse_brightness") landuse_brightness_ = std::clamp(std::atoi(value.c_str()), -150, 150);
+        else if (key == "landuse_contrast") landuse_contrast_ = std::clamp(std::strtof(value.c_str(), nullptr), 0.2f, 3.0f);
+        else if (key == "reference_line_color") parse_color4(value, reference_line_style_.color);
+        else if (key == "reference_line_width") reference_line_style_.width = std::clamp(std::strtof(value.c_str(), nullptr), 0.5f, 6.0f);
+        else if (key == "road_border_color") parse_color4(value, road_border_style_.color);
+        else if (key == "road_border_width") road_border_style_.width = std::clamp(std::strtof(value.c_str(), nullptr), 0.5f, 6.0f);
+        else if (key == "marking_color") parse_color4(value, marking_style_.color);
+        else if (key == "marking_width") marking_style_.width = std::clamp(std::strtof(value.c_str(), nullptr), 0.5f, 6.0f);
+        else if (key == "rail_track_color") parse_color4(value, rail_track_style_.color);
+        else if (key == "rail_track_width") rail_track_style_.width = std::clamp(std::strtof(value.c_str(), nullptr), 0.5f, 6.0f);
+        else if (key == "junction_marking_dash") junction_marking_dash_m_ = std::clamp(std::strtof(value.c_str(), nullptr), 0.1f, 10.0f);
+        else if (key == "junction_marking_gap") junction_marking_gap_m_ = std::clamp(std::strtof(value.c_str(), nullptr), 0.1f, 10.0f);
+        else if (key == "stop_line_color") parse_color4(value, stop_line_style_.color);
+        else if (key == "stop_line_width") stop_line_style_.width = std::clamp(std::strtof(value.c_str(), nullptr), 0.5f, 8.0f);
+    }
 }
 
 void GuiApp::add_session() {
@@ -145,6 +231,7 @@ void GuiApp::add_session() {
 void GuiApp::close_session(int index) {
     if (sessions_.size() <= 1 || index < 0 || index >= static_cast<int>(sessions_.size())) return;
     release_tile(sessions_[index].imagery);
+    release_tile(sessions_[index].landuse);
     sessions_.erase(sessions_.begin() + index);
     if (active_session_ >= static_cast<int>(sessions_.size()))
         active_session_ = static_cast<int>(sessions_.size()) - 1;
@@ -154,6 +241,9 @@ void GuiApp::fetch_imagery(Session& session) {
     release_tile(session.imagery);
     session.imagery = ImageryTile{};
     session.imagery_status.clear();
+    release_tile(session.landuse);
+    session.landuse = ImageryTile{};
+    session.landuse_status.clear();
 
     if (!session.has_origin) {
         session.imagery_status = "No projection origin available -- imagery skipped.";
@@ -193,6 +283,17 @@ void GuiApp::fetch_imagery(Session& session) {
                                        std::to_string(static_cast<int>(kMaxRadiusM)) + "m radius)";
         }
     }
+
+    // Official LGL land-use ground truth (see test/xodr_viewer.py's 'N' toggle) -- same
+    // center/radius as the aerial photo above, coarser resolution since it's vector-rendered
+    // polygons rather than a photo, so there's no real detail to lose.
+    session.landuse = gui::fetch_tile(center_lat, center_lon, radius_m, session.origin_lat, session.origin_lon,
+                                       "landnutzung", 0.5);
+    session.applied_landuse_brightness = 0;
+    session.applied_landuse_contrast = 1.0f;
+    session.landuse_status = session.landuse.error.empty()
+        ? (std::to_string(session.landuse.width_px) + "x" + std::to_string(session.landuse.height_px) + "px")
+        : session.landuse.error;
 }
 
 void GuiApp::run_conversion(Session& session) {
@@ -250,6 +351,10 @@ void GuiApp::draw_command_bar() {
             if (ImGui::MenuItem("Exit")) quit_requested_ = true;
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("View")) {
+            if (ImGui::MenuItem("Line & Color Settings...")) show_line_style_dialog_ = true;
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("About osm2xodr")) show_about_ = true;
             ImGui::EndMenu();
@@ -269,6 +374,54 @@ void GuiApp::draw_command_bar() {
         if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+
+    if (show_line_style_dialog_) {
+        ImGui::OpenPopup("Line & Color Settings");
+        show_line_style_dialog_ = false;
+    }
+    draw_line_style_dialog();
+}
+
+void GuiApp::draw_line_style_dialog() {
+    if (!ImGui::BeginPopupModal("Line & Color Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+
+    auto style_row = [](const char* label, LineStyle& style) {
+        ImGui::PushID(label);
+        ImGui::TextUnformatted(label);
+        ImGui::ColorEdit4("Color", style.color, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoInputs);
+        ImGui::SetNextItemWidth(160.0f);
+        ImGui::SliderFloat("Width (px)", &style.width, 0.5f, 6.0f, "%.1f");
+        ImGui::PopID();
+        ImGui::Spacing();
+    };
+
+    style_row("Reference line", reference_line_style_);
+    ImGui::Separator();
+    style_row("Road border (lane edges)", road_border_style_);
+    ImGui::Separator();
+    style_row("Lane markings", marking_style_);
+    ImGui::SetNextItemWidth(160.0f);
+    ImGui::SliderFloat("Junction dash length (m)", &junction_marking_dash_m_, 0.1f, 10.0f, "%.2f");
+    ImGui::SetNextItemWidth(160.0f);
+    ImGui::SliderFloat("Junction dash gap (m)", &junction_marking_gap_m_, 0.1f, 10.0f, "%.2f");
+    ImGui::Separator();
+    style_row("Rail/tram tracks", rail_track_style_);
+    ImGui::Separator();
+    style_row("Stop lines", stop_line_style_);
+    ImGui::Separator();
+
+    if (ImGui::Button("Reset to defaults")) {
+        reference_line_style_ = LineStyle{{1.0f, 0.831f, 0.0f, 0.902f}, 2.0f};
+        road_border_style_ = LineStyle{{1.0f, 0.314f, 0.314f, 0.784f}, 1.0f};
+        marking_style_ = LineStyle{{0.922f, 0.922f, 0.922f, 0.863f}, 1.0f};
+        rail_track_style_ = LineStyle{{0.55f, 0.68f, 0.75f, 0.9f}, 1.5f};
+        junction_marking_dash_m_ = 1.0f;
+        junction_marking_gap_m_ = 1.0f;
+        stop_line_style_ = LineStyle{{1.0f, 0.96f, 0.85f, 0.95f}, 3.0f};
+    }
+    ImGui::SameLine(0.0f, 16.0f);
+    if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
 }
 
 void GuiApp::draw_toolbar() {
@@ -276,6 +429,8 @@ void GuiApp::draw_toolbar() {
                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     if (!sessions_.empty()) {
         Session& session = sessions_[active_session_];
+
+        // Row 1: actions + layer toggles.
         if (ImGui::Button("Open...")) open_input_file(session);
         ImGui::SameLine(0.0f, 16.0f);
         if (ImGui::Button("Convert")) run_conversion(session);
@@ -286,26 +441,42 @@ void GuiApp::draw_toolbar() {
         ImGui::SameLine(0.0f, 20.0f);
         ImGui::Checkbox("Imagery", &show_imagery_);
         ImGui::SameLine(0.0f, 12.0f);
+        ImGui::Checkbox("Landuse", &show_landuse_);
+        ImGui::SameLine(0.0f, 12.0f);
         ImGui::Checkbox("Centerline", &show_center_);
         ImGui::SameLine(0.0f, 12.0f);
         ImGui::Checkbox("Lane edges", &show_lanes_);
         ImGui::SameLine(0.0f, 12.0f);
         ImGui::Checkbox("Markings", &show_markings_);
+        ImGui::SameLine(0.0f, 12.0f);
+        ImGui::Checkbox("Stop lines", &show_stop_lines_);
 
-        ImGui::SameLine(0.0f, 20.0f);
-        ImGui::TextDisabled("|");
-
-        ImGui::SameLine(0.0f, 20.0f);
+        // Row 2: per-layer brightness/contrast (each starts a new line since nothing before it
+        // calls SameLine()).
+        ImGui::Text("Photo:");
+        ImGui::SameLine();
         ImGui::Text("Brightness");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(110.0f);
+        ImGui::SetNextItemWidth(100.0f);
         ImGui::SliderInt("##brightness", &brightness_, -150, 150);
-
-        ImGui::SameLine(0.0f, 16.0f);
+        ImGui::SameLine(0.0f, 12.0f);
         ImGui::Text("Contrast");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(110.0f);
+        ImGui::SetNextItemWidth(100.0f);
         ImGui::SliderFloat("##contrast", &contrast_, 0.2f, 3.0f, "%.1fx");
+
+        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::Text("Landuse:");
+        ImGui::SameLine();
+        ImGui::Text("Brightness");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::SliderInt("##luBrightness", &landuse_brightness_, -150, 150);
+        ImGui::SameLine(0.0f, 12.0f);
+        ImGui::Text("Contrast");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::SliderFloat("##luContrast", &landuse_contrast_, 0.2f, 3.0f, "%.1fx");
     }
     ImGui::EndChild();
 }
@@ -358,6 +529,12 @@ void GuiApp::draw_preview_panel(Session& session, float width, float height) {
         session.applied_brightness = brightness_;
         session.applied_contrast = contrast_;
     }
+    if (session.landuse.texture_id != 0 &&
+        (session.applied_landuse_brightness != landuse_brightness_ || session.applied_landuse_contrast != landuse_contrast_)) {
+        apply_brightness_contrast(session.landuse, landuse_brightness_, landuse_contrast_);
+        session.applied_landuse_brightness = landuse_brightness_;
+        session.applied_landuse_contrast = landuse_contrast_;
+    }
 
     // Pan/zoom input first (so this frame's drag/wheel is already reflected in cam.cx/cy/scale
     // below, rather than lagging a frame behind).
@@ -390,6 +567,16 @@ void GuiApp::draw_preview_panel(Session& session, float width, float height) {
         const ImVec2 br = world_to_screen(session.imagery.max_x, session.imagery.min_y);
         draw_list->AddImage(ImTextureRef(static_cast<ImTextureID>(session.imagery.texture_id)), tl, br);
     }
+    if (show_landuse_ && session.landuse.texture_id != 0) {
+        const ImVec2 tl = world_to_screen(session.landuse.min_x, session.landuse.max_y);
+        const ImVec2 br = world_to_screen(session.landuse.max_x, session.landuse.min_y);
+        draw_list->AddImage(ImTextureRef(static_cast<ImTextureID>(session.landuse.texture_id)), tl, br);
+    }
+
+    const ImU32 reference_line_color = style_color(reference_line_style_);
+    const ImU32 road_border_color = style_color(road_border_style_);
+    const ImU32 marking_color = style_color(marking_style_);
+    const ImU32 rail_track_color = style_color(rail_track_style_);
 
     std::vector<ImVec2> screen_pts;
     if (show_center_ || show_lanes_) {
@@ -397,25 +584,42 @@ void GuiApp::draw_preview_panel(Session& session, float width, float height) {
             if (show_center_ && road.centerline.size() >= 2) {
                 screen_pts.clear();
                 for (const auto& wp : road.centerline) screen_pts.push_back(world_to_screen(wp.x, wp.y));
-                draw_list->AddPolyline(screen_pts.data(), static_cast<int>(screen_pts.size()), kColorCenter, 0, 2.0f);
+                draw_list->AddPolyline(screen_pts.data(), static_cast<int>(screen_pts.size()), reference_line_color,
+                                       0, reference_line_style_.width);
             }
             if (show_lanes_) {
+                const ImU32 edge_color = road.is_railway ? rail_track_color : road_border_color;
+                const float edge_width = road.is_railway ? rail_track_style_.width : road_border_style_.width;
                 for (const auto* edge : {&road.left_edge, &road.right_edge}) {
                     if (edge->size() < 2) continue;
                     screen_pts.clear();
                     for (const auto& wp : *edge) screen_pts.push_back(world_to_screen(wp.x, wp.y));
-                    draw_list->AddPolyline(screen_pts.data(), static_cast<int>(screen_pts.size()), kColorLane, 0, 1.0f);
+                    draw_list->AddPolyline(screen_pts.data(), static_cast<int>(screen_pts.size()), edge_color,
+                                           0, edge_width);
                 }
             }
         }
     }
     if (show_markings_) {
         for (const auto& marking : session.geometry.lane_markings) {
-            for (const auto& [start, end] : dash_index_ranges(marking)) {
+            const double dash = marking.is_junction ? static_cast<double>(junction_marking_dash_m_) : kMarkingDashM;
+            const double gap = marking.is_junction ? static_cast<double>(junction_marking_gap_m_) : kMarkingGapM;
+            for (const auto& [start, end] : dash_index_ranges(marking.points, dash, gap)) {
                 screen_pts.clear();
-                for (int i = start; i < end; ++i) screen_pts.push_back(world_to_screen(marking[i].x, marking[i].y));
-                draw_list->AddPolyline(screen_pts.data(), static_cast<int>(screen_pts.size()), kColorMarking, 0, 1.0f);
+                for (int i = start; i < end; ++i) screen_pts.push_back(world_to_screen(marking.points[i].x, marking.points[i].y));
+                draw_list->AddPolyline(screen_pts.data(), static_cast<int>(screen_pts.size()), marking_color,
+                                       0, marking_style_.width);
             }
+        }
+    }
+    if (show_stop_lines_) {
+        const ImU32 stop_line_color = style_color(stop_line_style_);
+        for (const auto& stop_line : session.geometry.stop_lines) {
+            if (stop_line.size() < 2) continue;
+            screen_pts.clear();
+            for (const auto& wp : stop_line) screen_pts.push_back(world_to_screen(wp.x, wp.y));
+            draw_list->AddPolyline(screen_pts.data(), static_cast<int>(screen_pts.size()), stop_line_color,
+                                   0, stop_line_style_.width);
         }
     }
 
@@ -426,8 +630,15 @@ void GuiApp::draw_preview_panel(Session& session, float width, float height) {
         const ImVec2 text_size = ImGui::CalcTextSize(placeholder);
         draw_list->AddText(ImVec2(p0.x + (avail.x - text_size.x) * 0.5f, p0.y + (avail.y - text_size.y) * 0.5f),
                             IM_COL32(160, 160, 160, 255), placeholder);
-    } else if (session.imagery.texture_id == 0 && !session.imagery_status.empty()) {
-        draw_list->AddText(ImVec2(p0.x + 6, p0.y + 6), IM_COL32(220, 160, 90, 255), session.imagery_status.c_str());
+    } else {
+        float warn_y = p0.y + 6;
+        if (show_imagery_ && session.imagery.texture_id == 0 && !session.imagery_status.empty()) {
+            draw_list->AddText(ImVec2(p0.x + 6, warn_y), IM_COL32(220, 160, 90, 255), session.imagery_status.c_str());
+            warn_y += ImGui::GetTextLineHeightWithSpacing();
+        }
+        if (show_landuse_ && session.landuse.texture_id == 0 && !session.landuse_status.empty()) {
+            draw_list->AddText(ImVec2(p0.x + 6, warn_y), IM_COL32(220, 160, 90, 255), session.landuse_status.c_str());
+        }
     }
 
     ImGui::EndChild();
@@ -445,6 +656,29 @@ void GuiApp::draw_details_panel(Session& session, float width, float height) {
         input_text("Output .xodr", o.output);
         input_text("Header name", o.name);
         input_text("Report path (optional)", o.report_path);
+    }
+
+    if (ImGui::CollapsingHeader("Highway filter")) {
+        ImGui::TextWrapped("Exclude specific highway=* values from the input entirely, "
+                            "as if they weren't roads at all (mirrors --config's ignore_highways).");
+        ImGui::Spacing();
+        // Recomputed from scratch every frame the section is drawn -- simpler and just as correct
+        // as incrementally diffing checkbox/text edits, since both sources are cheap to re-read and
+        // the resulting set only matters at the next conversion, not per-frame performance.
+        std::unordered_set<std::string> next_ignore;
+        const auto& known = osm::vehicle_highway_values();
+        for (std::size_t i = 0; i < known.size(); ++i) {
+            bool checked = o.ignore_highways.count(known[i]) != 0;
+            ImGui::Checkbox(known[i].c_str(), &checked);
+            if (checked) next_ignore.insert(known[i]);
+            if (i + 1 < known.size() && (i % 3) != 2) ImGui::SameLine(0.0f, 20.0f);
+        }
+        ImGui::Spacing();
+        input_text("Custom (comma-separated)", session.ignore_highways_custom);
+        for (const auto& token : util::split_any(session.ignore_highways_custom, ",")) {
+            next_ignore.insert(util::lower(token));
+        }
+        o.ignore_highways = std::move(next_ignore);
     }
 
     if (ImGui::CollapsingHeader("Projection origin")) {
@@ -465,9 +699,21 @@ void GuiApp::draw_details_panel(Session& session, float width, float height) {
     if (ImGui::CollapsingHeader("Lanes & geometry")) {
         ImGui::InputDouble("Default lane width (m)", &o.default_lane_width, 0.0, 0.0, "%.2f");
         ImGui::InputDouble("Sidewalk width (m)", &o.sidewalk_width, 0.0, 0.0, "%.2f");
+        ImGui::Checkbox("Infer curbs", &o.infer_curbs);
+        ImGui::InputDouble("Curb width (m)", &o.curb_width, 0.0, 0.0, "%.2f");
+        ImGui::InputDouble("Curb height (m)", &o.curb_height, 0.0, 0.0, "%.2f");
+        ImGui::InputDouble("Curb-cut taper length (m)", &o.curb_cut_taper_length, 0.0, 0.0, "%.2f");
+        ImGui::Checkbox("Infer medians", &o.infer_medians);
+        ImGui::InputDouble("Median width (m)", &o.median_width, 0.0, 0.0, "%.2f");
+        ImGui::Checkbox("Infer grass verges", &o.infer_grass_verges);
+        ImGui::InputDouble("Grass search radius (m)", &o.grass_search_radius, 0.0, 0.0, "%.2f");
+        ImGui::InputDouble("Border width (m)", &o.border_width, 0.0, 0.0, "%.2f");
         ImGui::Checkbox("Left-hand traffic", &o.left_hand_traffic);
         ImGui::Checkbox("Curve fit", &o.curve_fit);
         ImGui::Checkbox("Fix link continuity", &o.fix_link_continuity);
+        ImGui::Checkbox("Fix overlapping lanes", &o.fix_overlapping_lanes);
+        ImGui::InputDouble("Min lane width (m)", &o.min_lane_width, 0.0, 0.0, "%.2f");
+        ImGui::InputDouble("Min road clearance (m)", &o.min_road_clearance, 0.0, 0.0, "%.2f");
     }
 
     if (ImGui::CollapsingHeader("Junctions")) {

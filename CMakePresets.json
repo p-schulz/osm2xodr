@@ -64,6 +64,24 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "macos-debug-gui",
+      "displayName": "macOS Debug (GUI)",
+      "inherits": "macos-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "OSM2XODR_BUILD_GUI": "ON"
+      }
+    },
+    {
+      "name": "macos-release-gui",
+      "displayName": "macOS Release (GUI)",
+      "inherits": "macos-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "OSM2XODR_BUILD_GUI": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -100,6 +118,16 @@
       "name": "macos-release",
       "displayName": "macOS Release",
       "configurePreset": "macos-release"
+    },
+    {
+      "name": "macos-debug-gui",
+      "displayName": "macOS Debug (GUI)",
+      "configurePreset": "macos-debug-gui"
+    },
+    {
+      "name": "macos-release-gui",
+      "displayName": "macOS Release (GUI)",
+      "configurePreset": "macos-release-gui"
     }
   ]
 }

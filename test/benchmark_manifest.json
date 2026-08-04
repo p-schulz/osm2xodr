@@ -49,6 +49,18 @@
       "osm": "examples/lane_change.osm",
       "tier": "junction",
       "tags": ["lane-split-merge", "taper"]
+    },
+    {
+      "name": "curb-crossing",
+      "osm": "examples/curb_crossing.osm",
+      "tier": "junction",
+      "tags": ["synthetic", "smoke-test", "curb", "sidewalk"]
+    },
+    {
+      "name": "median-road",
+      "osm": "examples/median_road.osm",
+      "tier": "junction",
+      "tags": ["synthetic", "smoke-test", "median", "grass-verge"]
     }
   ],
 

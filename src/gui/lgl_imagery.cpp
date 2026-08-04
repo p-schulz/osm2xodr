@@ -58,6 +58,11 @@ struct LayerPreset {
     bool transparent = false;
     std::string source;
     std::string attribution;
+    float default_alpha_scale = 1.0f; // baked into the decoded pixels once, before the first
+                                       // upload -- e.g. landuse polygons are scaled down so they
+                                       // read as a semi-transparent overlay on top of the aerial
+                                       // photo by default, matching test/xodr_viewer.py's fixed
+                                       // landuse_alpha=160/255 blend, rather than fully opaque.
 };
 
 const LayerPreset& preset_for(const std::string& name) {
@@ -66,12 +71,12 @@ const LayerPreset& preset_for(const std::string& name) {
     static const LayerPreset kDop20{
         "https://owsproxy.lgl-bw.de/owsproxy/ows/WMS_LGL-BW_ATKIS_DOP_20_C",
         "IMAGES_DOP_20_RGB", "", false,
-        "WMS_LGL-BW_ATKIS_DOP_20_C / IMAGES_DOP_20_RGB", kAttribution,
+        "WMS_LGL-BW_ATKIS_DOP_20_C / IMAGES_DOP_20_RGB", kAttribution, 1.0f,
     };
     static const LayerPreset kLandnutzung{
         "https://owsproxy.lgl-bw.de/owsproxy/ows/WMS_LGL-BW_Landnutzung",
         "nora%3ALandnutzung", "ln_landnutzng_f", true,
-        "WMS_LGL-BW_Landnutzung / nora:Landnutzung (ATKIS Basis-DLM land use)", kAttribution,
+        "WMS_LGL-BW_Landnutzung / nora:Landnutzung (ATKIS Basis-DLM land use)", kAttribution, 160.0f / 255.0f,
     };
     return name == "landnutzung" ? kLandnutzung : kDop20;
 }
@@ -161,6 +166,11 @@ ImageryTile fetch_tile(double center_lat, double center_lon, double radius_m,
     if (!pixels) {
         tile.error = std::string("PNG decode failed: ") + stbi_failure_reason();
         return tile;
+    }
+
+    if (preset.default_alpha_scale != 1.0f) {
+        for (std::size_t i = 3; i < static_cast<std::size_t>(w) * h * 4; i += 4)
+            pixels[i] = static_cast<unsigned char>(std::clamp(pixels[i] * preset.default_alpha_scale, 0.0f, 255.0f));
     }
 
     GLuint tex = 0;

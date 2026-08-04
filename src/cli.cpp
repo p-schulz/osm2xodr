@@ -49,6 +49,19 @@ Options parse_args(const int argc, char** argv) {
                       << "  --origin-lon <deg>             Override projection origin longitude\n"
                       << "  --default-lane-width <m>       Default lane width, default 3.50\n"
                       << "  --sidewalk-width <m>           Sidewalk lane width, default 2.00\n"
+                      << "  --no-curbs                     Disable inferring curb lanes between roadway and sidewalk\n"
+                      << "  --curb-width <m>               Curb lane width, default 0.20\n"
+                      << "  --curb-height <m>              Curb height, default 0.12\n"
+                      << "  --curb-cut-taper-length <m>    Length over which curb height ramps to 0 at a dropped\n"
+                      << "                                 curb (highway=crossing), default 1.5\n"
+                      << "  --no-medians                   Disable inferring median lanes from median=yes\n"
+                      << "  --median-width <m>             Total width of an inferred center median (split evenly\n"
+                      << "                                 between both physical sides), default 3.0\n"
+                      << "  --no-grass-verges              Disable inferring roadside grass-verge (border) lanes\n"
+                      << "                                 from landuse=grass polygons near a road\n"
+                      << "  --grass-search-radius <m>      Max distance from a road to a landuse=grass polygon\n"
+                      << "                                 vertex to infer a grass verge there, default 5.0\n"
+                      << "  --border-width <m>             Width of an inferred grass-verge border lane, default 1.0\n"
                       << "  --left-hand-traffic            Use left-hand lane-direction assumptions\n"
                       << "  --junction-degree <n>          Minimum endpoint degree for junction, default 3\n"
                       << "  --signal-search-radius <m>     Max signal/sign matching distance, default 20\n"
@@ -75,6 +88,12 @@ Options parse_args(const int argc, char** argv) {
                       << "                                 roads instead of fitted <paramPoly3> curves\n"
                       << "  --no-link-continuity-fix       Disable fixing up heading mismatches at plain road-to-\n"
                       << "                                 road link boundaries (only takes effect with curve-fit on)\n"
+                      << "  --no-fix-overlapping-lanes     Disable shrinking default-width lanes on unrelated roads\n"
+                      << "                                 (matched by name/ref) whose lane edges overlap\n"
+                      << "  --min-lane-width <m>           Floor: never shrink a driving lane narrower than this\n"
+                      << "                                 when fixing overlapping lanes, default 2.5\n"
+                      << "  --min-road-clearance <m>       Target gap between two unrelated roads' facing lane\n"
+                      << "                                 edges when fixing overlapping lanes, default 0.5\n"
                       << "  --config <path.yaml>           Load a config file; currently supports one key,\n"
                       << "                                 ignore_highways: a list of OSM highway=* values to\n"
                       << "                                 exclude entirely (e.g. ignore_highways: [service, track])\n"
@@ -91,6 +110,24 @@ Options parse_args(const int argc, char** argv) {
             o.default_lane_width = util::parse_double_prefix(require_value(i, arg)).value_or(o.default_lane_width);
         } else if (arg == "--sidewalk-width") {
             o.sidewalk_width = util::parse_double_prefix(require_value(i, arg)).value_or(o.sidewalk_width);
+        } else if (arg == "--no-curbs") {
+            o.infer_curbs = false;
+        } else if (arg == "--curb-width") {
+            o.curb_width = util::parse_double_prefix(require_value(i, arg)).value_or(o.curb_width);
+        } else if (arg == "--curb-height") {
+            o.curb_height = util::parse_double_prefix(require_value(i, arg)).value_or(o.curb_height);
+        } else if (arg == "--curb-cut-taper-length") {
+            o.curb_cut_taper_length = util::parse_double_prefix(require_value(i, arg)).value_or(o.curb_cut_taper_length);
+        } else if (arg == "--no-medians") {
+            o.infer_medians = false;
+        } else if (arg == "--median-width") {
+            o.median_width = util::parse_double_prefix(require_value(i, arg)).value_or(o.median_width);
+        } else if (arg == "--no-grass-verges") {
+            o.infer_grass_verges = false;
+        } else if (arg == "--grass-search-radius") {
+            o.grass_search_radius = util::parse_double_prefix(require_value(i, arg)).value_or(o.grass_search_radius);
+        } else if (arg == "--border-width") {
+            o.border_width = util::parse_double_prefix(require_value(i, arg)).value_or(o.border_width);
         } else if (arg == "--left-hand-traffic") {
             o.left_hand_traffic = true;
         } else if (arg == "--junction-degree") {
@@ -121,6 +158,12 @@ Options parse_args(const int argc, char** argv) {
             o.curve_fit = false;
         } else if (arg == "--no-link-continuity-fix") {
             o.fix_link_continuity = false;
+        } else if (arg == "--no-fix-overlapping-lanes") {
+            o.fix_overlapping_lanes = false;
+        } else if (arg == "--min-lane-width") {
+            o.min_lane_width = util::parse_double_prefix(require_value(i, arg)).value_or(o.min_lane_width);
+        } else if (arg == "--min-road-clearance") {
+            o.min_road_clearance = util::parse_double_prefix(require_value(i, arg)).value_or(o.min_road_clearance);
         } else if (arg == "--config") {
             config::load_config_file(require_value(i, arg), o);
         } else if (arg == "--report") {
@@ -134,12 +177,20 @@ Options parse_args(const int argc, char** argv) {
 
     if (o.default_lane_width <= 0.1) util::fail("--default-lane-width must be positive");
     if (o.sidewalk_width <= 0.1) util::fail("--sidewalk-width must be positive");
+    if (o.curb_width <= 0.0) util::fail("--curb-width must be positive");
+    if (o.curb_height < 0.0) util::fail("--curb-height must not be negative");
+    if (o.curb_cut_taper_length <= 0.0) util::fail("--curb-cut-taper-length must be positive");
+    if (o.median_width <= 0.0) util::fail("--median-width must be positive");
+    if (o.grass_search_radius <= 0.0) util::fail("--grass-search-radius must be positive");
+    if (o.border_width <= 0.0) util::fail("--border-width must be positive");
     if (o.junction_degree < 2) util::fail("--junction-degree must be at least 2");
     if (o.signal_search_radius <= 0.0) util::fail("--signal-search-radius must be positive");
     if (o.junction_turn_radius <= 0.0) util::fail("--junction-turn-radius must be positive");
     if (o.junction_cluster_max_gap < 0.0) util::fail("--junction-cluster-max-gap must not be negative");
     if (o.junction_signal_setback_max_gap < 0.0) util::fail("--junction-signal-setback-max-gap must not be negative");
     if (o.lane_taper_length <= 0.0) util::fail("--lane-taper-length must be positive");
+    if (o.min_lane_width <= 0.0) util::fail("--min-lane-width must be positive");
+    if (o.min_road_clearance < 0.0) util::fail("--min-road-clearance must not be negative");
     return o;
 }
 

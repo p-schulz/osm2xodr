@@ -117,6 +117,13 @@ double side_extent(const std::vector<model::LaneSpec>& side, double local_s, dou
     return total;
 }
 
+bool has_track_lane(const std::vector<model::LaneSpec>& side) {
+    for (const auto& lane : side) {
+        if (lane.type == "rail" || lane.type == "tram") return true;
+    }
+    return false;
+}
+
 void expand_bounds(const WorldPoint& p, double& min_x, double& min_y, double& max_x, double& max_y) {
     min_x = std::min(min_x, p.x);
     max_x = std::max(max_x, p.x);
@@ -129,6 +136,8 @@ void expand_bounds(const WorldPoint& p, double& min_x, double& min_y, double& ma
 RoadTraces sample_road(const model::RoadSegment& road, double step) {
     RoadTraces traces;
     if (road.length <= 1e-6) return traces;
+
+    traces.is_railway = has_track_lane(road.lanes.left) || has_track_lane(road.lanes.right);
 
     const int n = std::max(1, static_cast<int>(std::ceil(road.length / step)));
     const auto sections = collect_sections(road);
@@ -164,11 +173,28 @@ std::vector<std::vector<WorldPoint>> sample_lane_markings(const model::RoadSegme
     const int n = std::max(1, static_cast<int>(std::ceil(road.length / step)));
     const auto sections = collect_sections(road);
 
+    // Evenly-spaced samples alone can skip a laneSection shorter than `step` entirely (e.g. a brief
+    // extra lane spanning under a couple meters), silently dropping any lane that only exists there
+    // (its run never reaches the >= 2 points needed below). Every section boundary is sampled twice
+    // -- once just before it (still the outgoing section's own lane plan) and once at it (the
+    // incoming section's) -- so even a very short section gets at least its own start and end.
+    std::vector<double> s_values;
+    s_values.reserve(n + 1 + 2 * sections.size());
+    for (int i = 0; i <= n; ++i) s_values.push_back(std::min(road.length, road.length * i / n));
+    for (std::size_t i = 1; i < sections.size(); ++i) {
+        const double boundary = std::clamp(sections[i].s_offset, 0.0, road.length);
+        s_values.push_back(std::max(0.0, boundary - 1e-4));
+        s_values.push_back(boundary);
+    }
+    std::sort(s_values.begin(), s_values.end());
+    s_values.erase(std::unique(s_values.begin(), s_values.end(),
+                                [](const double a, const double b) { return std::abs(a - b) < 1e-9; }),
+                   s_values.end());
+
     // Key: (0=left/1=right, ordinal).
     std::map<std::pair<int, int>, std::vector<WorldPoint>> open_runs;
 
-    for (int i = 0; i <= n; ++i) {
-        const double s = std::min(road.length, road.length * i / n);
+    for (const double s : s_values) {
         const auto [pos, hdg] = road_point_at_s(road, s);
         const auto& section = applicable_section(sections, s);
         const double local_s = s - section.s_offset;
@@ -184,10 +210,14 @@ std::vector<std::vector<WorldPoint>> sample_lane_markings(const model::RoadSegme
                 const auto& lane = lanes[ordinal];
                 double w = lane.width;
                 if (lane.width_end >= 0.0) w = lane.width + (lane.width_end - lane.width) * (local_s / section.span);
-                const double offset = lane_offset + sign * (inner_acc + w);
-                const std::pair<int, int> key{side, ordinal};
-                present.insert(key);
-                open_runs[key].push_back({pos.x + n_left.x * offset, pos.y + n_left.y * offset});
+                // Rail/tram track lanes carry no roadmark (see infer_lanes) -- don't trace a
+                // marking line along their boundary either.
+                if (lane.type != "rail" && lane.type != "tram") {
+                    const double offset = lane_offset + sign * (inner_acc + w);
+                    const std::pair<int, int> key{side, ordinal};
+                    present.insert(key);
+                    open_runs[key].push_back({pos.x + n_left.x * offset, pos.y + n_left.y * offset});
+                }
                 inner_acc += w;
             }
         }
@@ -208,6 +238,37 @@ std::vector<std::vector<WorldPoint>> sample_lane_markings(const model::RoadSegme
     return traces;
 }
 
+std::vector<std::vector<WorldPoint>> sample_stop_lines(const model::RoadSegment& road) {
+    std::vector<std::vector<WorldPoint>> traces;
+    if (road.length <= 1e-6) return traces;
+    const auto sections = collect_sections(road);
+
+    for (const auto& sig : road.signals) {
+        if (sig.type != "stop_line") continue;
+        const double s = std::clamp(sig.s, 0.0, road.length);
+        const auto [pos, hdg] = road_point_at_s(road, s);
+        const auto& section = applicable_section(sections, s);
+        const double local_s = s - section.s_offset;
+        const double lane_offset = section.lanes->lane_offset + section.lanes->lane_offset_slope * local_s;
+        const geo::Vec2 n_left = geo::left_normal({std::cos(hdg), std::sin(hdg)});
+
+        // Prefer whichever side sig.t actually sits on, but a signal near the reference line
+        // (t ~ 0, common on a oneway road where only one side has lanes at all) can round to the
+        // empty side -- fall back to whichever side actually has lanes instead of drawing nothing.
+        const double left_extent = side_extent(section.lanes->left, local_s, section.span);
+        const double right_extent = side_extent(section.lanes->right, local_s, section.span);
+        const bool prefer_left = sig.t >= 0.0;
+        const bool left_side = prefer_left ? left_extent > 1e-6 : !(right_extent > 1e-6);
+        const double extent = left_side ? left_extent : right_extent;
+        if (extent <= 1e-6) continue; // no lanes on either side to draw a stop line across
+        const double inner_offset = lane_offset;
+        const double outer_offset = lane_offset + (left_side ? extent : -extent);
+        traces.push_back({{pos.x + n_left.x * inner_offset, pos.y + n_left.y * inner_offset},
+                           {pos.x + n_left.x * outer_offset, pos.y + n_left.y * outer_offset}});
+    }
+    return traces;
+}
+
 PreviewGeometry build_preview_geometry(const model::MapModel& model, double step) {
     PreviewGeometry out;
     double min_x = std::numeric_limits<double>::infinity();
@@ -223,9 +284,15 @@ PreviewGeometry build_preview_geometry(const model::MapModel& model, double step
         for (const auto& p : traces.right_edge) expand_bounds(p, min_x, min_y, max_x, max_y);
         out.roads.push_back(std::move(traces));
 
+        const bool is_junction = !road.junction_id.empty();
         for (auto& marking : sample_lane_markings(road, step)) {
             for (const auto& p : marking) expand_bounds(p, min_x, min_y, max_x, max_y);
-            out.lane_markings.push_back(std::move(marking));
+            out.lane_markings.push_back({std::move(marking), is_junction});
+        }
+
+        for (auto& stop_line : sample_stop_lines(road)) {
+            for (const auto& p : stop_line) expand_bounds(p, min_x, min_y, max_x, max_y);
+            out.stop_lines.push_back(std::move(stop_line));
         }
     }
 
