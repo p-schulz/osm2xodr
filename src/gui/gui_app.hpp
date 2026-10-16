@@ -85,6 +85,7 @@ private:
     void add_session();
     void close_session(int index);
     void run_conversion(Session& session);
+    void open_xodr(Session& session, const std::string& path);
     void fetch_imagery(Session& session);
 
     // Persists/restores view preferences only (layer toggles, brightness/contrast, line

@@ -5,6 +5,7 @@
 #include "osm2xodr/report.hpp"
 #include "osm2xodr/util.hpp"
 #include "osm2xodr/xodr_writer.hpp"
+#include "xodr_preview.hpp"
 
 #include <imgui.h>
 #include <tinyfiledialogs.h>
@@ -80,13 +81,27 @@ std::string derive_output_path(const std::string& input_path) {
     return dir + stem + ".xodr";
 }
 
-// Native "Open" dialog (tinyfiledialogs: Cocoa/AppleScript on macOS, zenity/kdialog on Linux,
-// the Win32 common dialogs on Windows). Blocking, like any native modal file picker -- the whole
-// app pauses while it's open, same as the existing blocking WMS fetch during Convert.
+// Native "Open" dialog (tinyfiledialogs: AppleScript/osascript on macOS -- this project builds
+// tinyfiledialogs.c as plain C, not Objective-C, so it never gets the real Cocoa NSOpenPanel --
+// zenity/kdialog on Linux, the Win32 common dialogs on Windows). Blocking, like any native modal
+// file picker -- the whole app pauses while it's open, same as the existing blocking WMS fetch
+// during Convert.
+//
+// No filter patterns on macOS: AppleScript's "choose file ... of type {...}" maps each pattern to
+// a literal file "type" by stripping tinyfiledialogs' own leading "*." (so "*.xodr" becomes
+// `of type {"xodr"}`), which isn't a real UTI/OSType for an ordinary extension on modern macOS --
+// instead of just hiding non-matching files, the picker makes *every* file unselectable. Passing
+// no filters at all (the kdialog/zenity/Win32 paths don't have this bug) is the known workaround;
+// see save_output_file() below, whose "choose file name" AppleScript branch never applies filters
+// in the first place, which is why Save was never affected.
 void open_input_file(Session& session) {
+#if defined(__APPLE__)
+    const char* result = tinyfd_openFileDialog("Open OSM file", "", 0, nullptr, nullptr, 0);
+#else
     const char* filters[] = {"*.osm", "*.pbf", "*.osm.pbf", "*.osm.bz2"};
     const char* result = tinyfd_openFileDialog("Open OSM file", "", 4, filters,
                                                 "OpenStreetMap files (*.osm, *.pbf)", 0);
+#endif
     if (!result) return; // cancelled
     session.options.input = result;
     session.options.output = derive_output_path(result);
@@ -99,6 +114,20 @@ void save_output_file(Session& session) {
                                                 filters, "OpenDRIVE files (*.xodr)");
     if (!result) return; // cancelled
     session.options.output = result;
+}
+
+// Native "Open" dialog for an already-converted .xodr, for viewing one without its original OSM
+// input. Returns an empty string if cancelled. No filter patterns on macOS -- see
+// open_input_file()'s comment above for why.
+std::string open_xodr_path() {
+#if defined(__APPLE__)
+    const char* result = tinyfd_openFileDialog("Open XODR file", "", 0, nullptr, nullptr, 0);
+#else
+    const char* filters[] = {"*.xodr"};
+    const char* result = tinyfd_openFileDialog("Open XODR file", "", 1, filters,
+                                                "OpenDRIVE files (*.xodr)", 0);
+#endif
+    return result ? result : "";
 }
 
 // ImGui::InputText needs a fixed, writable char buffer; these small helpers copy a std::string
@@ -334,6 +363,36 @@ void GuiApp::run_conversion(Session& session) {
     }
 }
 
+// Loads an already-converted .xodr straight into the preview, bypassing run_conversion()'s whole
+// OSM pipeline -- for viewing a file that's already on disk without its original OSM input.
+// options.input is left empty (Convert refuses to run without one, same message as an empty new
+// tab) and options.output is pointed at the opened file so "Save XODR As..." defaults sensibly.
+void GuiApp::open_xodr(Session& session, const std::string& path) {
+    session.log.clear();
+    try {
+        const XodrPreviewResult result = build_preview_geometry_from_xodr(path, 2.0);
+
+        session.options.input.clear();
+        session.options.output = path;
+        session.label = filename_only(path);
+        session.last_road_count = result.road_count;
+        session.last_junction_count = result.junction_count;
+        session.status = "Loaded " + path + " with " + std::to_string(result.road_count) +
+                          " road(s) and " + std::to_string(result.junction_count) + " junction(s).";
+
+        session.geometry = std::move(result.geometry);
+        session.has_origin = result.has_origin;
+        session.origin_lat = result.origin_lat;
+        session.origin_lon = result.origin_lon;
+        session.camera_initialized = false;
+        if (session.has_origin) fetch_imagery(session);
+    } catch (const std::exception& e) {
+        session.last_road_count = -1;
+        session.last_junction_count = -1;
+        session.status = std::string("Failed to open ") + path + ": " + e.what();
+    }
+}
+
 void GuiApp::draw_command_bar() {
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -343,6 +402,10 @@ void GuiApp::draw_command_bar() {
             ImGui::Separator();
             if (ImGui::MenuItem("Open OSM...", nullptr, false, !sessions_.empty()))
                 open_input_file(sessions_[active_session_]);
+            if (ImGui::MenuItem("Open XODR...", nullptr, false, !sessions_.empty())) {
+                const std::string path = open_xodr_path();
+                if (!path.empty()) open_xodr(sessions_[active_session_], path);
+            }
             if (ImGui::MenuItem("Convert", nullptr, false, !sessions_.empty()))
                 run_conversion(sessions_[active_session_]);
             if (ImGui::MenuItem("Save XODR As...", nullptr, false, !sessions_.empty()))
@@ -432,6 +495,11 @@ void GuiApp::draw_toolbar() {
 
         // Row 1: actions + layer toggles.
         if (ImGui::Button("Open...")) open_input_file(session);
+        ImGui::SameLine(0.0f, 8.0f);
+        if (ImGui::Button("Open XODR...")) {
+            const std::string path = open_xodr_path();
+            if (!path.empty()) open_xodr(session, path);
+        }
         ImGui::SameLine(0.0f, 16.0f);
         if (ImGui::Button("Convert")) run_conversion(session);
 
